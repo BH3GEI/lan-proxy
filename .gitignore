@@ -1,0 +1,4 @@
+pkg/dist/
+pkg/content/
+vendor/*.gz
+vendor/test/

@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>局域网代理</title>
+<style>
+:root{--bg:#f6f4f1;--panel:#fff;--ink:#1d1b19;--mute:#6f6a64;--line:#e4dfd8;--acc:#d9601c;--ok:#2f7d4f;--bad:#b3261e;--warn:#a86b00;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root{--bg:#171513;--panel:#201d1a;--ink:#ece7e1;--mute:#9b948c;--line:#34302b;--acc:#f07a32;--ok:#5cb57e;--bad:#ef6a5f;--warn:#e0a63a}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 -apple-system,"PingFang SC","Segoe UI",system-ui,sans-serif}
+header{display:flex;align-items:baseline;gap:14px;padding:18px 24px 6px}
+h1{font-size:22px;font-weight:600;margin:0;letter-spacing:.5px}h2{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:1px;color:var(--mute);margin:0 0 10px}
+.ver{color:var(--mute);font-size:12px}
+main{padding:8px 24px 40px;display:grid;gap:16px;grid-template-columns:repeat(12,1fr)}
+section{background:var(--panel);border:1px solid var(--line);padding:14px 16px}
+.s12{grid-column:span 12}.s7{grid-column:span 7}.s5{grid-column:span 5}
+@media (max-width:900px){.s7,.s5{grid-column:span 12}main{padding:8px 10px 30px}header{padding:14px 12px 4px}}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:1px;background:var(--line);border:1px solid var(--line)}
+.tile{background:var(--panel);padding:10px 12px;min-width:0}.tile b{display:block;font-size:18px;overflow-wrap:anywhere;font-weight:600;font-variant-numeric:tabular-nums}.tile span{color:var(--mute);font-size:12px}
+.state{display:inline-block;padding:2px 8px;font-size:12px;font-weight:600;color:#fff}
+.on{background:var(--ok)}.off{background:var(--mute)}.err{background:var(--bad)}
+.errbox{margin-top:10px;padding:8px 10px;border-left:3px solid var(--bad);background:color-mix(in srgb,var(--bad) 8%,transparent)}
+table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--mute);font-weight:500;font-size:12px}
+td.mono,.mono{font-family:var(--mono);font-size:12px}
+.r-ok{color:var(--ok)}.r-bad{color:var(--bad)}.r-warn{color:var(--warn)}
+button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:5px 12px;cursor:pointer}
+button:hover{border-color:var(--acc)}button.primary{background:var(--acc);border-color:var(--acc);color:#fff}button.danger{color:var(--bad)}
+input,select,textarea{font:inherit;border:1px solid var(--line);background:var(--bg);color:var(--ink);padding:5px 8px}textarea{font-family:var(--mono);font-size:12px;width:100%}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}.row label{color:var(--mute);min-width:96px}
+.hint{color:var(--mute);font-size:12px}
+pre{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid var(--line);padding:10px;overflow:auto;margin:6px 0;white-space:pre-wrap;word-break:break-all}
+.flash{position:fixed;right:16px;bottom:16px;max-width:420px;padding:10px 14px;background:var(--ink);color:var(--bg);display:none}
+.pw{font-family:var(--mono);font-size:15px;background:var(--bg);padding:6px 10px;border:1px dashed var(--acc);display:inline-block;user-select:all}
+.tabs button{border:none;border-bottom:2px solid transparent;padding:4px 10px}.tabs button.cur{border-bottom-color:var(--acc);font-weight:600}
+.logwrap{max-height:560px;overflow:auto}
+</style>
+</head>
+<body>
+<header><h1>局域网代理</h1><span class="ver" id="ver"></span><span id="badge"></span></header>
+<main>
+<section class="s12">
+  <h2>运行状态</h2>
+  <div class="tiles">
+    <div class="tile"><span>监听地址</span><b class="mono" id="t-listen">–</b></div>
+    <div class="tile"><span>局域网网段</span><b class="mono" id="t-lan">–</b></div>
+    <div class="tile"><span>活动连接</span><b id="t-active">–</b></div>
+    <div class="tile"><span>累计连接</span><b id="t-total">–</b></div>
+    <div class="tile"><span>拒绝 / 认证失败</span><b id="t-denied">–</b></div>
+    <div class="tile"><span>上行 / 下行</span><b id="t-bytes">–</b></div>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <button class="primary" id="b-toggle">停止代理</button>
+    <button id="b-selftest">自检：从容器网络连接（应被拒绝）</button>
+    <span class="hint" id="t-meta"></span>
+  </div>
+  <div id="selftest"></div>
+  <div class="errbox" id="t-error" style="display:none"></div>
+</section>
+
+<section class="s7">
+  <h2>账号</h2>
+  <table><thead><tr><th>用户名</th><th>状态</th><th>备注</th><th>创建时间</th><th></th></tr></thead><tbody id="users"></tbody></table>
+  <div class="row" style="margin-top:12px">
+    <input id="u-name" placeholder="用户名" size="12" autocomplete="off">
+    <input id="u-pass" placeholder="密码（留空自动生成）" size="20" type="password" autocomplete="new-password">
+    <input id="u-note" placeholder="备注（设备名）" size="14">
+    <button class="primary" id="b-adduser">添加 / 重设密码</button>
+  </div>
+  <div id="newpw"></div>
+  <p class="hint">只保存密码的 PBKDF2 哈希。停用或删除账号后，该账号的现有连接立即断开。同一来源 10 分钟内认证失败 10 次，封禁 15 分钟。</p>
+</section>
+
+<section class="s5">
+  <h2>设置</h2>
+  <div class="row"><label>端口</label><input id="s-port" type="number" min="1024" max="65535" style="width:100px"></div>
+  <div class="row"><label>监听地址</label><input id="s-listen" placeholder="自动（默认路由网卡的 IPv4）" size="24"></div>
+  <div class="row"><label>局域网网段</label><input id="s-lan" placeholder="自动（该网卡的子网）" size="24"></div>
+  <div class="row"><label>额外禁止目标</label><textarea id="s-deny" rows="3" placeholder="每行一个 IP 或网段"></textarea></div>
+  <div class="row"><button class="primary" id="b-save">保存</button><span class="hint">保存后约 1 秒生效</span></div>
+  <p class="hint">固定拒绝的目标：NAS 所有网卡上的全部地址（定期重新枚举）、回环、容器和懒猫内网等私有或保留网段（局域网网段除外）、链路本地、组播和广播地址、经由非局域网网卡路由的地址。域名先解析，任一解析结果被拒则整个请求被拒，然后直接连接检查过的 IP。</p>
+</section>
+
+<section class="s12">
+  <h2>出口与分流</h2>
+  <div class="row">
+    <label>出口模式</label>
+    <select id="e-mode"><option value="rules">分流：中国网址直连，其余走节点</option><option value="direct">全部直连</option></select>
+    <span id="e-badge"></span><span class="hint" id="e-meta"></span>
+  </div>
+  <div class="row"><label>订阅</label><span class="mono" id="e-sub">–</span>
+    <input id="e-suburl" type="password" placeholder="粘贴新的订阅地址以替换" size="34" autocomplete="off">
+    <label style="min-width:0">更新间隔</label><input id="e-hours" type="number" min="1" max="168" style="width:64px"><span class="hint">小时</span>
+    <button class="primary" id="b-esave">保存</button>
+    <button id="b-subup">立即更新订阅</button><button id="b-ruleup">立即更新规则库</button>
+  </div>
+  <div class="row"><label>测速地址</label><input id="e-test" size="40"></div>
+  <p class="hint">订阅地址含令牌，保存后页面只显示域名。订阅由本应用下载：先直连，失败时经已有节点下载。分流规则依次为：私有和保留地址拒绝 → 中国域名列表直连 → 中国 IP 段直连 → 其余走「节点选择」。局域网设备由前端直接连接，不经过分流内核。没有订阅时，非中国流量被拒绝，不会改为直连。</p>
+  <div class="tiles" style="margin:10px 0">
+    <div class="tile"><span>订阅节点</span><b id="e-nodes">–</b></div>
+    <div class="tile"><span>订阅更新时间</span><b id="e-subt" style="font-size:14px">–</b></div>
+    <div class="tile"><span>订阅流量</span><b id="e-subinfo" style="font-size:14px">–</b></div>
+    <div class="tile"><span>规则库</span><b id="e-rules" style="font-size:14px">–</b></div>
+    <div class="tile"><span>内核活动连接</span><b id="e-active">–</b></div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+    <div>
+      <div class="row"><b>节点选择</b><span class="hint">当前：</span><span class="mono" id="g-sel">–</span></div>
+      <div class="row"><select id="g-pick" style="max-width:100%"></select><button class="primary" id="b-pick">切换</button><button id="b-test">全部测速</button></div>
+      <div class="row"><b>自动选择</b><span class="hint">当前：</span><span class="mono" id="g-auto">–</span><span class="hint">每 5 分钟测速，快 100 ms 以上才切换</span></div>
+      <div class="logwrap" style="max-height:300px"><table><thead><tr><th>节点</th><th>类型</th><th>延迟</th></tr></thead><tbody id="g-nodes"></tbody></table></div>
+    </div>
+    <div>
+      <b>分流命中统计</b><span class="hint">（内核本次启动以来）</span>
+      <table style="margin-top:6px"><thead><tr><th>出口</th><th>次数</th></tr></thead><tbody id="st-out"></tbody></table>
+      <table style="margin-top:10px"><thead><tr><th>规则</th><th>次数</th></tr></thead><tbody id="st-rule"></tbody></table>
+      <details style="margin-top:10px"><summary class="hint">内核日志</summary><pre id="e-log" style="max-height:220px"></pre></details>
+    </div>
+  </div>
+</section>
+
+<section class="s12">
+  <h2>客户端配置</h2>
+  <div id="howto" class="hint">代理启动后显示。</div>
+</section>
+
+<section class="s12">
+  <h2>连接日志</h2>
+  <div class="row tabs" id="logtabs">
+    <button data-r="" class="cur">全部</button><button data-r="ok">成功</button><button data-r="denied">被拒或失败</button>
+    <select id="l-user"><option value="">所有账号</option></select>
+    <label style="min-width:0"><input type="checkbox" id="l-auto" checked> 自动刷新</label>
+    <span class="hint">只记录连接元数据（时间、来源、账号、目标、结果、字节数），不记录内容。</span>
+  </div>
+  <div class="logwrap"><table><thead><tr><th>时间</th><th>来源</th><th>账号</th><th>协议</th><th>目标</th><th>IP</th><th>出口</th><th>结果</th><th>上行/下行</th><th>时长</th></tr></thead><tbody id="logs"></tbody></table></div>
+</section>
+
+<section class="s12">
+  <h2>本机网卡（代理进程所见）</h2>
+  <p class="hint">这些地址全部禁止作为代理目标。下表省略只有链路本地地址的容器虚拟网卡（veth）。</p>
+  <details><summary class="hint">展开</summary><table><thead><tr><th>网卡</th><th>地址</th></tr></thead><tbody id="ifaces"></tbody></table></details>
+</section>
+</main>
+<div class="flash" id="flash"></div>
+<script>
+const $=id=>document.getElementById(id);
+let S=null,logFilter="";
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function fmtB(n){n=n||0;const u=["B","KB","MB","GB","TB"];let i=0;while(n>=1024&&i<4){n/=1024;i++}return (i?n.toFixed(1):n)+" "+u[i]}
+function fmtT(t){const d=new Date(t);return d.toLocaleString("zh-CN",{hour12:false,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit"})}
+function flash(m){const f=$("flash");f.textContent=m;f.style.display="block";clearTimeout(f._t);f._t=setTimeout(()=>f.style.display="none",4000)}
+async function api(path,body){
+  const r=await fetch(path,body===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json","X-Lanproxy":"1"},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({error:r.statusText}));
+  if(!r.ok)throw new Error(j.error||r.statusText);return j;
+}
+const RES={ok:["成功","r-ok"],src_denied:["来源被拒","r-bad"],auth_failed:["认证失败","r-bad"],auth_blocked:["来源已封禁","r-bad"],dst_denied:["目标被拒","r-bad"],dial_failed:["连接失败","r-warn"],bad_request:["请求无效","r-warn"],busy:["连接数已满","r-warn"]};
+async function refresh(){
+  try{S=await api("/api/state")}catch(e){$("badge").innerHTML='<span class="state err">管理接口错误</span>';return}
+  const st=S.status,set=S.settings;
+  $("ver").textContent=st?("v"+st.version):"";
+  let badge;
+  if(S.stale)badge='<span class="state err">代理进程无响应</span>';
+  else if(st.listening)badge='<span class="state on">运行中</span>';
+  else if(!set.enabled)badge='<span class="state off">已停止</span>';
+  else badge='<span class="state err">未监听</span>';
+  $("badge").innerHTML=badge;
+  $("b-toggle").textContent=set.enabled?"停止代理":"启动代理";
+  $("b-toggle").className=set.enabled?"":"primary";
+  if(st){
+    $("t-listen").textContent=st.listen||"–";$("t-lan").textContent=(st.lan_cidrs||[]).join(" ")||"–";
+    $("t-active").textContent=st.active;$("t-total").textContent=st.total;
+    $("t-denied").textContent=st.denied+" / "+st.auth_failed;$("t-bytes").textContent=fmtB(st.bytes_up)+" / "+fmtB(st.bytes_down);
+    $("t-meta").textContent="进程 "+st.pid+"，启动于 "+fmtT(st.started)+"，默认路由网卡 "+(st.default_if||"?")+(st.active_users&&st.active_users.length?"，在线账号："+st.active_users.join("、"):"");
+    $("ifaces").innerHTML=(st.interfaces||[]).filter(i=>!(i.name.startsWith("veth")&&i.addrs.every(a=>a.startsWith("fe80")))).map(i=>`<tr><td class="mono">${esc(i.name)}${i.name===st.default_if?" （局域网）":""}</td><td class="mono">${esc(i.addrs.join("  "))}</td></tr>`).join("");
+    const e=$("t-error");if(st.error){e.style.display="block";e.textContent=st.error}else e.style.display="none";
+  }
+  if(document.activeElement.tagName!=="INPUT"&&document.activeElement.tagName!=="TEXTAREA"){
+    $("s-port").value=set.port;$("s-listen").value=set.listen_ip;$("s-lan").value=set.lan_cidrs.join(" ");$("s-deny").value=set.extra_deny.join("\n");
+  }
+  $("users").innerHTML=S.users.map(u=>`<tr><td class="mono">${esc(u.name)}</td><td>${u.enabled?'<span class="r-ok">启用</span>':'<span class="r-bad">停用</span>'}</td><td>${esc(u.note)}</td><td class="mono">${esc((u.created||"").slice(0,16).replace("T"," "))}</td><td style="white-space:nowrap"><button data-act="toggle" data-u="${esc(u.name)}" data-en="${u.enabled?0:1}">${u.enabled?"停用":"启用"}</button> <button data-act="pw" data-u="${esc(u.name)}">重设密码</button> <button class="danger" data-act="del" data-u="${esc(u.name)}">删除</button></td></tr>`).join("")||'<tr><td colspan="5" class="hint">还没有账号，代理会拒绝所有连接。先添加一个账号。</td></tr>';
+  const sel=$("l-user"),cur=sel.value;sel.innerHTML='<option value="">所有账号</option>'+S.users.map(u=>`<option${u.name===cur?" selected":""}>${esc(u.name)}</option>`).join("");
+  renderHowto(st);
+}
+function renderHowto(st){
+  if(!st||!st.listen){$("howto").innerHTML='<span class="hint">代理启动后显示。</span>';return}
+  const [ip,port]=[st.listen.replace(/:\d+$/,""),st.listen.match(/:(\d+)$/)[1]];
+  const u=S.users.find(x=>x.enabled)?.name||"用户名";
+  $("howto").innerHTML=`<p class="hint">同一端口同时接受 HTTP（含 CONNECT）和 SOCKS5，只接受局域网 ${esc((st.lan_cidrs||[]).join(" "))} 内的设备。下面的「密码」替换为该账号的密码。</p>
+<pre>地址 ${esc(ip)}    端口 ${esc(port)}    账号 ${esc(u)}
+
+# 命令行（macOS / Linux）
+export http_proxy=http://${esc(u)}:密码@${esc(ip)}:${esc(port)}
+export https_proxy=$http_proxy all_proxy=socks5h://${esc(u)}:密码@${esc(ip)}:${esc(port)}
+curl -x http://${esc(u)}:密码@${esc(ip)}:${esc(port)} https://example.com
+curl --socks5-hostname ${esc(ip)}:${esc(port)} -U ${esc(u)}:密码 https://example.com
+
+# 代理 URI（Clash/Surge/sing-box 等客户端）
+http://${esc(u)}:密码@${esc(ip)}:${esc(port)}
+socks5://${esc(u)}:密码@${esc(ip)}:${esc(port)}
+
+# iPhone / iPad：设置 → 无线局域网 → 当前网络 → 配置代理 → 手动
+#   服务器 ${esc(ip)}，端口 ${esc(port)}，打开「鉴定」，填写账号和密码
+# macOS：系统设置 → 网络 → 当前网络 → 详细信息 → 代理 → 网页代理(HTTP) 和 安全网页代理(HTTPS)
+# Windows：设置 → 网络和 Internet → 代理 → 手动设置代理（系统代理不支持填写密码，首次访问时浏览器会询问）
+# Android：WLAN → 当前网络 → 修改 → 代理 → 手动（系统代理不支持密码，建议用支持 HTTP/SOCKS5 认证的客户端）</pre>`;
+}
+async function loadLogs(){
+  try{
+    const L=await api(`/api/logs?n=300&result=${encodeURIComponent(logFilter)}&user=${encodeURIComponent($("l-user").value)}`);
+    $("logs").innerHTML=L.map(r=>{const [t,c]=RES[r.result]||[r.result,""];return `<tr><td class="mono">${fmtT(r.t)}</td><td class="mono">${esc(r.src)}</td><td class="mono">${esc(r.user)}</td><td>${esc(r.proto)}</td><td class="mono">${esc(r.target)}</td><td class="mono">${esc(r.ip)}</td><td class="mono" title="${esc(r.rule||"")}">${esc(r.outbound||(r.via==="core"?"分流内核":""))}${r.rule?'<div class="hint">'+esc(r.rule)+'</div>':""}</td><td class="${c}" title="${esc(r.reason)}">${esc(t)}${r.reason?'<div class="hint">'+esc(r.reason)+'</div>':""}</td><td class="mono">${r.result==="ok"?fmtB(r.up)+" / "+fmtB(r.down):""}</td><td class="mono">${r.dur_ms!=null&&r.result==="ok"?(r.dur_ms/1000).toFixed(1)+" s":""}</td></tr>`}).join("")||'<tr><td colspan="10" class="hint">暂无记录</td></tr>';
+  }catch(e){}
+}
+$("b-toggle").onclick=async()=>{try{await api("/api/settings",{enabled:!S.settings.enabled});flash(S.settings.enabled?"已停止":"已启动");setTimeout(refresh,1500)}catch(e){flash(e.message)}};
+$("b-save").onclick=async()=>{try{await api("/api/settings",{port:+$("s-port").value,listen_ip:$("s-listen").value,lan_cidrs:$("s-lan").value.split(/[\s,]+/),extra_deny:$("s-deny").value.split(/[\s,]+/)});flash("已保存");$("b-save").blur();setTimeout(refresh,1500)}catch(e){flash(e.message)}};
+$("b-adduser").onclick=async()=>{try{const j=await api("/api/users",{name:$("u-name").value,password:$("u-pass").value,note:$("u-note").value});
+  $("newpw").innerHTML=j.password?`<p>账号 <b class="mono">${esc($("u-name").value)}</b> 的密码（只显示这一次）：<span class="pw">${esc(j.password)}</span></p>`:`<p class="hint">已${j.created?"添加":"更新密码"}。</p>`;
+  $("u-pass").value="";$("u-name").value="";$("u-note").value="";refresh()}catch(e){flash(e.message)}};
+$("users").onclick=async ev=>{const b=ev.target.closest("button");if(!b)return;const u=b.dataset.u;try{
+  if(b.dataset.act==="toggle"){await api("/api/users/toggle",{name:u,enabled:b.dataset.en==="1"})}
+  else if(b.dataset.act==="del"){if(!confirm("删除账号 "+u+"？"))return;await api("/api/users/delete",{name:u})}
+  else if(b.dataset.act==="pw"){const j=await api("/api/users",{name:u,password:""});$("newpw").innerHTML=`<p>账号 <b class="mono">${esc(u)}</b> 的新密码（只显示这一次）：<span class="pw">${esc(j.password)}</span></p>`}
+  refresh()}catch(e){flash(e.message)}};
+$("b-selftest").onclick=async()=>{$("selftest").innerHTML='<p class="hint">自检中…</p>';try{const j=await api("/api/selftest",{});
+  $("selftest").innerHTML=`<p class="${j.pass?"r-ok":"r-bad"}">${j.pass?"通过":"未通过"}：${esc(j.summary)}</p>`+(j.log?`<pre>${esc(JSON.stringify(j.log))}</pre>`:"")}catch(e){$("selftest").innerHTML=`<p class="r-bad">${esc(e.message)}</p>`}};
+$("logtabs").onclick=ev=>{const b=ev.target.closest("button");if(!b)return;logFilter=b.dataset.r;[...$("logtabs").querySelectorAll("button")].forEach(x=>x.classList.toggle("cur",x===b));loadLogs()};
+$("l-user").onchange=loadLogs;
+refresh();loadLogs();
+setInterval(refresh,3000);setInterval(()=>{if($("l-auto").checked)loadLogs()},3000);
+let C=null;
+const fmtD=d=>d<0?"–":d===0?'<span class="r-bad">超时</span>':(d<300?'<span class="r-ok">':d<800?'<span class="r-warn">':'<span class="r-bad">')+d+" ms</span>";
+async function loadCore(){
+  try{C=await api("/api/core")}catch(e){return}
+  const st=C.state,set=S&&S.settings;
+  if(set){
+    if(document.activeElement!==$("e-mode"))$("e-mode").value=set.egress_mode;
+    $("e-sub").textContent=set.sub_set?set.sub_host:"未设置";
+    if(document.activeElement!==$("e-hours"))$("e-hours").value=set.sub_interval_hours;
+    if(document.activeElement!==$("e-test"))$("e-test").value=set.test_url;
+  }
+  let b;
+  if(C.stale||!st)b='<span class="state err">内核进程无响应</span>';
+  else if(st.running&&!C.ctl_error)b='<span class="state on">内核运行中</span>';
+  else b='<span class="state err">内核未运行</span>';
+  $("e-badge").innerHTML=b;
+  $("e-meta").textContent=st?("监听 "+(st.listen||"–")+"（仅容器网络），重启 "+st.restarts+" 次"+(st.error?"，错误："+st.error:"")+(C.ctl_error?"，"+C.ctl_error:"")):"";
+  const sub=C.subscription,ss=st&&st.sub||{};
+  $("e-nodes").textContent=sub?sub.nodes:"0";
+  $("e-subt").innerHTML=(ss.fetched&&!ss.fetched.startsWith("0001")?esc(fmtT(ss.fetched))+(ss.via?"（"+esc(ss.via)+"）":""):"–")+(ss.error?'<div class="r-bad" style="font-size:12px;font-weight:400">'+esc(ss.error)+"</div>":"");
+  $("e-subinfo").textContent=ss.total?(fmtB(ss.upload+ss.download)+" / "+fmtB(ss.total)+(ss.expire?"，到期 "+new Date(ss.expire*1000).toLocaleDateString("zh-CN"):"")):"–";
+  const R=C.rules||{};
+  $("e-rules").innerHTML=Object.keys(R).sort().map(k=>`${esc(k)} ${R[k].ruleCount} 条，${R[k].updatedAt&&!R[k].updatedAt.startsWith("0001")?fmtT(R[k].updatedAt):"–"}`).join("<br>")||"–";
+  $("e-active").textContent=C.core_active??"–";
+  const G=Object.fromEntries((C.groups||[]).map(g=>[g.name,g]));
+  const sel=G["节点选择"],auto=G["自动选择"];
+  $("g-sel").textContent=sel?sel.now:"–";$("g-auto").textContent=auto?auto.now:"–";
+  if(sel&&document.activeElement!==$("g-pick")){const cur=$("g-pick").value||sel.now;$("g-pick").innerHTML=sel.nodes.map(n=>`<option${n.name===cur?" selected":""}>${esc(n.name)}</option>`).join("")}
+  const list=(auto||sel||{nodes:[]}).nodes.slice().sort((x,y)=>(x.delay<=0?1e9:x.delay)-(y.delay<=0?1e9:y.delay));
+  $("g-nodes").innerHTML=list.map(n=>`<tr><td class="mono">${esc(n.name)}${sel&&n.name===sel.now||auto&&n.name===auto.now?' <span class="r-ok">●</span>':""}</td><td>${esc(n.type)}</td><td class="mono">${fmtD(n.delay)}</td></tr>`).join("")||'<tr><td colspan="3" class="hint">无节点</td></tr>';
+  const rows=m=>Object.entries(m||{}).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td class="mono">${esc(k)}</td><td class="mono">${v}</td></tr>`).join("")||'<tr><td colspan="2" class="hint">暂无</td></tr>';
+  $("st-out").innerHTML=rows(st&&st.by_outbound);$("st-rule").innerHTML=rows(st&&st.by_rule);
+  $("e-log").textContent=(st&&st.log||[]).join("\n");
+}
+$("b-esave").onclick=async()=>{try{const body={egress_mode:$("e-mode").value,sub_interval_hours:+$("e-hours").value,test_url:$("e-test").value};const u=$("e-suburl").value.trim();if(u)body.sub_url=u;await api("/api/settings",body);$("e-suburl").value="";flash("已保存，内核将重新加载");setTimeout(()=>{refresh();loadCore()},2500)}catch(e){flash(e.message)}};
+$("b-pick").onclick=async()=>{try{await api("/api/core/select",{group:"节点选择",name:$("g-pick").value});flash("已切换");loadCore()}catch(e){flash(e.message)}};
+$("b-test").onclick=async()=>{flash("测速中…");try{const j=await api("/api/core/test",{});flash("测速完成："+j.tested+" 个节点有结果");loadCore()}catch(e){flash(e.message)}};
+$("b-subup").onclick=async()=>{try{await api("/api/core/update",{what:"sub"});flash("订阅已更新");loadCore()}catch(e){flash(e.message)}};
+$("b-ruleup").onclick=async()=>{try{await api("/api/core/update",{what:"rules"});flash("规则库已更新");loadCore()}catch(e){flash(e.message)}};
+loadCore();setInterval(loadCore,5000);
+</script>
+</body>
+</html>
