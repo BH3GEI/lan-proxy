@@ -23,7 +23,7 @@ func (h *harness) setNoAuth(on bool) {
 
 // socksAnon offers only the "no authentication" method.
 func (h *harness) socksAnon(host string, port int) (net.Conn, byte, byte) {
-	c, err := net.Dial("tcp4", h.addr)
+	c, err := net.Dial("tcp", h.addr)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestNoAuthSOCKS5AndHTTP(t *testing.T) {
 	echoCheck(t, c, br)
 	c.Close()
 
-	c, _ = net.Dial("tcp4", h.addr)
+	c, _ = net.Dial("tcp", h.addr)
 	c.SetDeadline(time.Now().Add(5 * time.Second))
 	fmt.Fprintf(c, "GET http://web.test/x HTTP/1.1\r\nHost: web.test\r\n\r\n")
 	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
@@ -270,7 +270,7 @@ func TestNoAuthWrongPasswordNotDowngraded(t *testing.T) {
 	h := newHarness(t, "127.0.0.0/8", func(s *Server) { s.Limits.AuthFailMax = 3 })
 	h.setNoAuth(true)
 	// SOCKS5 client offering both "no auth" and "username/password", with a wrong password.
-	c, _ := net.Dial("tcp4", h.addr)
+	c, _ := net.Dial("tcp", h.addr)
 	c.SetDeadline(time.Now().Add(3 * time.Second))
 	c.Write([]byte{5, 2, 0, 2})
 	b := make([]byte, 2)

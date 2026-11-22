@@ -80,6 +80,8 @@ type Server struct {
 	authCache  map[[32]byte]string
 	ln         net.Listener
 	listenAddr string
+	ln6        net.Listener // LazyCat network listener
+	listenMesh string
 	lastErr    string
 	conns      map[uint64]*tracked
 	perSrc     map[netip.Addr]int
@@ -224,6 +226,9 @@ func (s *Server) Run(ctx context.Context) {
 			if s.ln != nil {
 				s.ln.Close()
 			}
+			if s.ln6 != nil {
+				s.ln6.Close()
+			}
 			s.mu.Unlock()
 			s.flushMerge(true)
 			return
@@ -343,25 +348,56 @@ func (s *Server) apply(view *NetView) {
 		s.stopLocked(true)
 		return
 	}
+	// Drop connections that the new policy would not accept (for example
+	// LazyCat-network clients after that listener is switched off).
+	for _, t := range s.conns {
+		if pol.CheckSourceAt(addrOf(t.conn.RemoteAddr()), addrOf(t.conn.LocalAddr())) != "" {
+			t.close()
+		}
+	}
 	addr := net.JoinHostPort(pol.ListenIP.String(), strconv.Itoa(cfg.Port))
-	if s.ln != nil && s.listenAddr == addr {
-		return
+	if s.ln == nil || s.listenAddr != addr {
+		if s.ln != nil {
+			s.ln.Close()
+			s.ln, s.listenAddr = nil, ""
+		}
+		// tcp4 + an explicit LAN address: never 0.0.0.0, ::, docker or LazyCat interfaces.
+		ln, err := net.Listen("tcp4", addr)
+		if err != nil {
+			s.lastErr = "监听失败：" + err.Error()
+		} else {
+			s.ln, s.listenAddr = ln, addr
+			go s.acceptLoop(ln)
+		}
 	}
-	s.stopLocked(false)
-	// tcp4 + an explicit LAN address: never 0.0.0.0, ::, docker or LazyCat interfaces.
-	ln, err := net.Listen("tcp4", addr)
-	if err != nil {
-		s.lastErr = "监听失败：" + err.Error()
-		return
+	mesh := ""
+	if pol.MeshIP.IsValid() {
+		mesh = net.JoinHostPort(pol.MeshIP.String(), strconv.Itoa(cfg.Port))
 	}
-	s.ln, s.listenAddr = ln, addr
-	go s.acceptLoop(ln)
+	if s.ln6 != nil && s.listenMesh != mesh {
+		s.ln6.Close()
+		s.ln6, s.listenMesh = nil, ""
+	}
+	if mesh != "" && s.ln6 == nil {
+		// tcp6 on the single LazyCat-network address only.
+		ln, err := net.Listen("tcp6", mesh)
+		if err != nil {
+			pol.MeshNote = "组网地址监听失败：" + err.Error()
+		} else {
+			s.ln6, s.listenMesh = ln, mesh
+			go s.acceptLoop(ln)
+		}
+	}
 }
 
 func (s *Server) stopLocked(closeConns bool) {
 	if s.ln != nil {
 		s.ln.Close()
 		s.ln, s.listenAddr = nil, ""
+	}
+	if s.ln6 != nil {
+		s.ln6.Close()
+		s.ln6, s.listenMesh = nil, ""
 	}
 	if closeConns {
 		for _, t := range s.conns {
@@ -384,6 +420,13 @@ func (s *Server) ListenAddr() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.listenAddr
+}
+
+// MeshListenAddr returns the LazyCat-network listen address ("" when off).
+func (s *Server) MeshListenAddr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listenMesh
 }
 
 func (s *Server) acceptLoop(ln net.Listener) {
@@ -421,7 +464,7 @@ func (s *Server) handle(c net.Conn) {
 		c.Close()
 		return
 	}
-	if r := pol.CheckSource(src); r != "" {
+	if r := pol.CheckSourceAt(src, addrOf(c.LocalAddr())); r != "" {
 		c.Close()
 		rec.Result, rec.Reason = "src_denied", r
 		s.denied.Add(1)
@@ -481,10 +524,10 @@ func (s *Server) handle(c net.Conn) {
 // noAuthAllowed reports whether src may connect without credentials: the
 // switch is on and the source is inside the LAN (checked again here, on top
 // of the source check every connection already passed).
-func (s *Server) noAuthAllowed(src netip.Addr) bool {
+func (s *Server) noAuthAllowed(t *tracked, src netip.Addr) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return !s.cfg.RequireAuth && s.pol != nil && s.pol.CheckSource(src) == ""
+	return !s.cfg.RequireAuth && s.pol != nil && s.pol.CheckSourceAt(src, addrOf(t.conn.LocalAddr())) == ""
 }
 
 func (s *Server) markAnon(t *tracked, rec *ConnRecord, src netip.Addr) {
@@ -898,7 +941,7 @@ func (s *Server) serveSOCKS5(c net.Conn, br *bufio.Reader, t *tracked, src netip
 		}
 		c.Write([]byte{0x01, 0x00})
 		t.user.Store(string(uname))
-	case hasNone && s.noAuthAllowed(src):
+	case hasNone && s.noAuthAllowed(t, src):
 		c.Write([]byte{0x05, 0x00})
 		s.markAnon(t, &rec, src)
 	default:
@@ -1102,7 +1145,7 @@ func (s *Server) serveHTTP(c net.Conn, br *bufio.Reader, t *tracked, src netip.A
 		}
 		name, pass, ok := proxyAuth(req.Header)
 		switch {
-		case !ok && req.Header.Get("Proxy-Authorization") == "" && s.noAuthAllowed(src):
+		case !ok && req.Header.Get("Proxy-Authorization") == "" && s.noAuthAllowed(t, src):
 			s.markAnon(t, &r, src)
 		case !ok:
 			httpError(c, http.StatusProxyAuthRequired, authChallenge)
@@ -1318,20 +1361,25 @@ func (s *Server) macOf(ip netip.Addr) string {
 func (s *Server) writeStatus(view *NetView) {
 	s.mu.Lock()
 	st := Status{
-		Version:   Version,
-		PID:       os.Getpid(),
-		Started:   s.started,
-		Updated:   time.Now(),
-		Enabled:   s.cfg.Enabled,
-		Listening: s.ln != nil,
-		Listen:    s.listenAddr,
-		Error:     s.lastErr,
-		Users:     len(s.users),
+		Version:    Version,
+		PID:        os.Getpid(),
+		Started:    s.started,
+		Updated:    time.Now(),
+		Enabled:    s.cfg.Enabled,
+		Listening:  s.ln != nil,
+		Listen:     s.listenAddr,
+		ListenMesh: s.listenMesh,
+		Error:      s.lastErr,
+		Users:      len(s.users),
 	}
 	if s.pol != nil {
 		for _, p := range s.pol.LAN {
 			st.LANCIDRs = append(st.LANCIDRs, p.String())
 		}
+		if s.pol.Mesh.IsValid() {
+			st.MeshCIDR = s.pol.Mesh.String()
+		}
+		st.MeshNote = s.pol.MeshNote
 	}
 	seen := map[string]bool{}
 	for _, t := range s.conns {

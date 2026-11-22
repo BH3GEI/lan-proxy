@@ -41,8 +41,8 @@ pre{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid
 <section class="s12">
   <h2>运行状态</h2>
   <div class="tiles">
-    <div class="tile"><span>监听地址</span><b class="mono" id="t-listen">–</b></div>
-    <div class="tile"><span>局域网网段</span><b class="mono" id="t-lan">–</b></div>
+    <div class="tile"><span>监听地址</span><b class="mono" id="t-listen" style="white-space:pre-line;word-break:break-all;font-size:14px">–</b></div>
+    <div class="tile"><span>允许来源</span><b class="mono" id="t-lan" style="white-space:pre-line;word-break:break-all;font-size:14px">–</b></div>
     <div class="tile"><span>活动连接</span><b id="t-active">–</b></div>
     <div class="tile"><span>累计连接</span><b id="t-total">–</b></div>
     <div class="tile"><span>拒绝 / 认证失败</span><b id="t-denied">–</b></div>
@@ -73,6 +73,7 @@ pre{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid
 <section class="s5">
   <h2>设置</h2>
   <div class="row"><label>局域网免密码</label><label style="min-width:0"><input type="checkbox" id="s-noauth"> 局域网内的设备不填账号密码也能用</label><span class="hint" id="s-noauth-h"></span></div>
+  <div class="row"><label>懒猫组网访问</label><label style="min-width:0"><input type="checkbox" id="s-mesh"> 也在懒猫组网地址上监听，在外面的设备可用</label><span class="hint" id="s-mesh-h"></span></div>
   <div class="row"><label>端口</label><input id="s-port" type="number" min="1024" max="65535" style="width:100px"></div>
   <div class="row"><label>监听地址</label><input id="s-listen" placeholder="自动（默认路由网卡的 IPv4）" size="24"></div>
   <div class="row"><label>局域网网段</label><input id="s-lan" placeholder="自动（该网卡的子网）" size="24"></div>
@@ -170,7 +171,8 @@ async function refresh(){
   $("b-toggle").textContent=set.enabled?"停止代理":"启动代理";
   $("b-toggle").className=set.enabled?"":"primary";
   if(st){
-    $("t-listen").textContent=st.listen||"–";$("t-lan").textContent=(st.lan_cidrs||[]).join(" ")||"–";
+    $("t-listen").textContent=(st.listen||"–")+(st.listen_mesh?"\n"+st.listen_mesh:"");$("t-lan").textContent=(st.lan_cidrs||[]).join(" ")+(st.mesh_cidr?"\n组网 "+st.mesh_cidr:"")||"–";
+    $("s-mesh-h").textContent=st.listen_mesh?"已在 "+st.listen_mesh+" 监听，只接受懒猫组网 "+st.mesh_cidr+" 内的设备":(st.mesh_note?"未监听："+st.mesh_note:"");
     $("t-active").textContent=st.active;$("t-total").textContent=st.total;
     $("t-denied").textContent=st.denied+" / "+st.auth_failed;$("t-bytes").textContent=fmtB(st.bytes_up)+" / "+fmtB(st.bytes_down);
     $("t-meta").textContent="进程 "+st.pid+"，启动于 "+fmtT(st.started)+"，默认路由网卡 "+(st.default_if||"?")+(st.active_users&&st.active_users.length?"，在线账号："+st.active_users.join("、"):"");
@@ -178,7 +180,7 @@ async function refresh(){
     const e=$("t-error");if(st.error){e.style.display="block";e.textContent=st.error}else e.style.display="none";
   }
   if(document.activeElement.tagName!=="INPUT"&&document.activeElement.tagName!=="TEXTAREA"){
-    $("s-noauth").checked=set.lan_no_auth;
+    $("s-noauth").checked=set.lan_no_auth;$("s-mesh").checked=set.mesh;
     $("s-port").value=set.port;$("s-listen").value=set.listen_ip;$("s-lan").value=set.lan_cidrs.join(" ");$("s-deny").value=set.extra_deny.join("\n");
   }
   $("users").innerHTML=S.users.map(u=>`<tr><td class="mono">${esc(u.name)}</td><td>${u.enabled?'<span class="r-ok">启用</span>':'<span class="r-bad">停用</span>'}</td><td>${esc(u.note)}</td><td class="mono">${esc((u.created||"").slice(0,16).replace("T"," "))}</td><td style="white-space:nowrap"><button data-act="toggle" data-u="${esc(u.name)}" data-en="${u.enabled?0:1}">${u.enabled?"停用":"启用"}</button> <button data-act="pw" data-u="${esc(u.name)}">重设密码</button> <button class="danger" data-act="del" data-u="${esc(u.name)}">删除</button></td></tr>`).join("")||'<tr><td colspan="5" class="hint">还没有账号。'+(set.lan_no_auth?"局域网免密码已打开，不填账号也能用。":"代理会拒绝所有连接，先添加一个账号。")+'</td></tr>';
@@ -191,7 +193,9 @@ function renderHowto(st){
   if(!st||!st.listen){$("howto").innerHTML='<span class="hint">代理启动后显示。</span>';return}
   const [ip,port]=[st.listen.replace(/:\d+$/,""),st.listen.match(/:(\d+)$/)[1]];
   const u=S.users.find(x=>x.enabled)?.name||"用户名",na=S.settings.lan_no_auth;
-  const lan=esc((st.lan_cidrs||[]).join(" "));
+  const lan=esc((st.lan_cidrs||[]).join(" "))+(st.listen_mesh?" 和懒猫组网 "+esc(st.mesh_cidr):"");
+  const box=location.hostname.split(".").slice(1).join(".")||"<盒子名>.heiyu.space";
+  const meshLine=st.listen_mesh?`\n# 在外面（手机/电脑已登录懒猫客户端）：服务器填 ${esc(box)}，端口 ${esc(port)}，其他同上\nhttp://${esc(box)}:${esc(port)}\nsocks5://${esc(box)}:${esc(port)}`:"";
   $("howto").innerHTML=na?`<p class="hint">局域网免密码已打开：只填地址和端口即可，账号密码可不填（填了也照常可用）。同一端口同时接受 HTTP（含 CONNECT）和 SOCKS5，只接受局域网 ${lan} 内的设备。</p>
 <pre>服务器 ${esc(ip)}    端口 ${esc(port)}    类型 HTTP 或 SOCKS5
 
@@ -203,7 +207,7 @@ curl -x http://${esc(ip)}:${esc(port)} https://example.com
 curl --socks5-hostname ${esc(ip)}:${esc(port)} https://example.com
 # 代理 URI（Clash/Surge/sing-box 等）
 http://${esc(ip)}:${esc(port)}
-socks5://${esc(ip)}:${esc(port)}</pre>`:`<p class="hint">同一端口同时接受 HTTP（含 CONNECT）和 SOCKS5，只接受局域网 ${lan} 内的设备。下面的「密码」替换为该账号的密码。</p>
+socks5://${esc(ip)}:${esc(port)}${meshLine}</pre>`:`<p class="hint">同一端口同时接受 HTTP（含 CONNECT）和 SOCKS5，只接受局域网 ${lan} 内的设备。下面的「密码」替换为该账号的密码。</p>
 <pre>地址 ${esc(ip)}    端口 ${esc(port)}    账号 ${esc(u)}
 
 # 命令行（macOS / Linux）
@@ -242,6 +246,7 @@ $("b-selftest").onclick=async()=>{$("selftest").innerHTML='<p class="hint">自�
   $("selftest").innerHTML=`<p class="${j.pass?"r-ok":"r-bad"}">${j.pass?"通过":"未通过"}：${esc(j.summary)}</p>`+(j.log?`<pre>${esc(JSON.stringify(j.log))}</pre>`:"")}catch(e){$("selftest").innerHTML=`<p class="r-bad">${esc(e.message)}</p>`}};
 $("logtabs").onclick=ev=>{const b=ev.target.closest("button");if(!b)return;logFilter=b.dataset.r;[...$("logtabs").querySelectorAll("button")].forEach(x=>x.classList.toggle("cur",x===b));loadLogs()};
 $("l-user").onchange=loadLogs;
+$("s-mesh").onchange=async ev=>{const on=ev.target.checked;try{await api("/api/settings",{mesh:on});flash(on?"已打开懒猫组网访问":"已关闭懒猫组网访问，组网来源的连接已断开");setTimeout(refresh,1500)}catch(e){flash(e.message);ev.target.checked=!on}};
 let lt;for(const id of ["l-src","l-target"])$(id).oninput=()=>{clearTimeout(lt);lt=setTimeout(loadLogs,300)};
 $("s-noauth").onchange=async ev=>{const on=ev.target.checked;if(!on&&!S.users.some(u=>u.enabled)&&!confirm("还没有启用的账号，关闭后所有设备都连不上。确定关闭？")){ev.target.checked=true;return}
   try{await api("/api/settings",{lan_no_auth:on});flash(on?"已打开局域网免密码":"已关闭局域网免密码，免密码的连接已断开");setTimeout(refresh,1200)}catch(e){flash(e.message);ev.target.checked=!on}};

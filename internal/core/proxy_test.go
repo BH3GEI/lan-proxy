@@ -105,6 +105,7 @@ func newHarnessMode(t *testing.T, lan, mode string, tweak func(*Server)) *harnes
 		}
 		p.ListenIP = netip.MustParseAddr("127.0.0.1")
 		p.LAN = []netip.Prefix{netip.MustParsePrefix(lan)}
+		p.MeshIP, p.Mesh, p.MeshIf = netip.Addr{}, netip.Prefix{}, "" // mesh tests opt in via meshTweak
 		for _, s := range c.ExtraDeny {
 			pf, _ := ParsePrefix(s)
 			p.ExtraDeny = append(p.ExtraDeny, pf)
@@ -233,7 +234,7 @@ func (h *harness) lastLog(result string) *ConnRecord {
 // socks dials the proxy and performs a SOCKS5 handshake. It returns the
 // connection, the auth status byte and the reply code (0xFF if not reached).
 func (h *harness) socks(user, pass, host string, port int) (net.Conn, byte, byte) {
-	c, err := net.Dial("tcp4", h.addr)
+	c, err := net.Dial("tcp", h.addr)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -277,7 +278,7 @@ func basic(u, p string) string {
 }
 
 func (h *harness) connect(auth, target string) (net.Conn, *bufio.Reader, int) {
-	c, err := net.Dial("tcp4", h.addr)
+	c, err := net.Dial("tcp", h.addr)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -336,7 +337,7 @@ func TestHTTPConnectOK(t *testing.T) {
 
 func TestHTTPPlainOK(t *testing.T) {
 	h := newHarness(t, "127.0.0.0/8", nil)
-	c, _ := net.Dial("tcp4", h.addr)
+	c, _ := net.Dial("tcp", h.addr)
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(5 * time.Second))
 	br := bufio.NewReader(c)
@@ -397,7 +398,7 @@ func TestDisabledAndUnknownUserRejected(t *testing.T) {
 
 func TestSOCKS5NoAuthMethodRejected(t *testing.T) {
 	h := newHarness(t, "127.0.0.0/8", nil)
-	c, _ := net.Dial("tcp4", h.addr)
+	c, _ := net.Dial("tcp", h.addr)
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(3 * time.Second))
 	c.Write([]byte{5, 1, 0})
@@ -464,7 +465,7 @@ func TestDestinationsDenied(t *testing.T) {
 		t.Fatalf("log %+v", r)
 	}
 	// Plain HTTP to the NAS.
-	c, _ := net.Dial("tcp4", h.addr)
+	c, _ := net.Dial("tcp", h.addr)
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(3 * time.Second))
 	fmt.Fprintf(c, "GET http://192.168.3.89:5000/ HTTP/1.1\r\nHost: 192.168.3.89\r\nProxy-Authorization: %s\r\n\r\n", basic("alice", "alice-password"))
@@ -618,7 +619,7 @@ func TestMaxConnections(t *testing.T) {
 
 func TestHandshakeTimeout(t *testing.T) {
 	h := newHarness(t, "127.0.0.0/8", func(s *Server) { s.Limits.HandshakeTimeout = 200 * time.Millisecond })
-	c, _ := net.Dial("tcp4", h.addr)
+	c, _ := net.Dial("tcp", h.addr)
 	defer c.Close()
 	start := time.Now()
 	c.SetDeadline(time.Now().Add(3 * time.Second))
@@ -644,7 +645,7 @@ func TestIdleTunnelClosed(t *testing.T) {
 
 func TestHeaderTooLarge(t *testing.T) {
 	h := newHarness(t, "127.0.0.0/8", nil)
-	c, _ := net.Dial("tcp4", h.addr)
+	c, _ := net.Dial("tcp", h.addr)
 	defer c.Close()
 	c.SetDeadline(time.Now().Add(3 * time.Second))
 	fmt.Fprintf(c, "CONNECT public.test:443 HTTP/1.1\r\nX-Pad: %s\r\n", strings.Repeat("a", 20000))

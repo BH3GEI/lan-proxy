@@ -1,13 +1,13 @@
 package: bh3gei.lzcapp.lanproxy
-version: 0.3.1
+version: 0.4.0
 name: 局域网代理
-description: "只服务局域网设备的 HTTP/SOCKS5 代理。中国网址直连，其余走订阅节点；账号密码认证，拒绝非局域网来源，禁止经代理访问 NAS 本机和内网，网页管理。"
+description: "服务局域网和懒猫组网设备的 HTTP/SOCKS5 代理。中国网址直连，其余走订阅节点；可免密码或账号密码认证，拒绝容器网络和公网来源，禁止经代理访问 NAS 本机和内网，网页管理。"
 author: BH3GEI
 license: MIT
 locales:
   zh:
     name: 局域网代理
-    description: "只服务局域网设备的 HTTP/SOCKS5 代理。中国网址直连，其余走订阅节点；账号密码认证，拒绝非局域网来源，禁止经代理访问 NAS 本机和内网，网页管理。"
+    description: "服务局域网和懒猫组网设备的 HTTP/SOCKS5 代理。中国网址直连，其余走订阅节点；可免密码或账号密码认证，拒绝容器网络和公网来源，禁止经代理访问 NAS 本机和内网，网页管理。"
   en:
     name: LAN Proxy
-    description: "LAN-only HTTP/SOCKS5 proxy. China sites go direct, the rest via subscription nodes; password accounts; refuses non-LAN clients and blocks access to the NAS itself and internal networks."
+    description: "HTTP/SOCKS5 proxy for LAN and LazyCat-network devices. China sites go direct, the rest via subscription nodes; optional password accounts; refuses container and public clients and blocks access to the NAS itself and internal networks."

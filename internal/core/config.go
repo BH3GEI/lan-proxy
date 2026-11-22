@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const Version = "0.3.1"
+const Version = "0.4.0"
 
 // User is one proxy account. Only a salted PBKDF2 hash of the password is stored.
 type User struct {
@@ -42,6 +42,9 @@ type Config struct {
 	// RequireAuth=false (the default, Yao's choice): clients from the LAN may
 	// connect without credentials; clients that send credentials are still checked.
 	RequireAuth bool `json:"require_auth"`
+	// NoMesh=false (the default): also listen on the NAS's LazyCat network
+	// address and accept clients from that network (same rules as the LAN).
+	NoMesh bool `json:"no_mesh"`
 
 	// Egress. "rules": LAN destinations direct, everything else through the
 	// mihomo core (China list direct, the rest via subscription nodes).
@@ -221,6 +224,9 @@ type Status struct {
 	Enabled    bool       `json:"enabled"`
 	Listening  bool       `json:"listening"`
 	Listen     string     `json:"listen"`
+	ListenMesh string     `json:"listen_mesh,omitempty"`
+	MeshCIDR   string     `json:"mesh_cidr,omitempty"`
+	MeshNote   string     `json:"mesh_note,omitempty"` // why the LazyCat network listener is off
 	LANCIDRs   []string   `json:"lan_cidrs"`
 	DefaultIf  string     `json:"default_if"`
 	Interfaces []IfStatus `json:"interfaces"`

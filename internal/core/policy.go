@@ -235,6 +235,46 @@ type Policy struct {
 	ListenIP  netip.Addr
 	LAN       []netip.Prefix
 	ExtraDeny []netip.Prefix
+
+	// LazyCat network (IPv6 ULA overlay, interface heiyu-0 on the NAS).
+	// Valid only when found and enabled.
+	MeshIP   netip.Addr
+	Mesh     netip.Prefix
+	MeshIf   string
+	MeshNote string // why it is off
+}
+
+// fc00::/8 holds the LazyCat network (fc03:1136:…); docker and LazyCat
+// container networks use fd00::/8 and are never treated as the mesh.
+var meshSpace = netip.MustParsePrefix("fc00::/8")
+
+// findMesh returns the single local address inside fc00::/8 with a
+// network-sized prefix (/8 to /64), the LazyCat network interface address.
+func findMesh(v *NetView) (netip.Addr, netip.Prefix, string, string) {
+	type cand struct {
+		pf    netip.Prefix
+		iface string
+	}
+	var cs []cand
+	for _, st := range v.Ifaces {
+		for _, s := range st.Addrs {
+			pf, err := netip.ParsePrefix(s)
+			if err != nil || !pf.Addr().Is6() || pf.Addr().Is4In6() || !meshSpace.Contains(pf.Addr()) {
+				continue
+			}
+			if pf.Bits() < 8 || pf.Bits() > 64 {
+				continue
+			}
+			cs = append(cs, cand{pf, st.Name})
+		}
+	}
+	switch len(cs) {
+	case 0:
+		return netip.Addr{}, netip.Prefix{}, "", "未找到懒猫组网地址"
+	case 1:
+		return cs[0].pf.Addr(), cs[0].pf.Masked(), cs[0].iface, ""
+	}
+	return netip.Addr{}, netip.Prefix{}, "", "找到多个懒猫组网地址，为安全起见不监听"
 }
 
 func BuildPolicy(cfg Config, v *NetView) (*Policy, error) {
@@ -296,7 +336,38 @@ func BuildPolicy(cfg Config, v *NetView) (*Policy, error) {
 		}
 		p.ExtraDeny = append(p.ExtraDeny, pf)
 	}
+	if cfg.NoMesh {
+		p.MeshNote = "已关闭"
+	} else {
+		p.MeshIP, p.Mesh, p.MeshIf, p.MeshNote = findMesh(v)
+	}
 	return p, nil
+}
+
+// CheckSourceAt checks a client by the address it came from and the local
+// address it connected to. The LAN listener serves only LAN IPv4 sources; the
+// LazyCat-network listener serves only sources inside that network whose
+// return route goes out the LazyCat interface.
+func (p *Policy) CheckSourceAt(a, local netip.Addr) string {
+	a, local = a.Unmap(), local.Unmap()
+	if p.MeshIP.IsValid() && local == p.MeshIP {
+		if iface, ok := p.Net.LocalIPs[a]; ok {
+			return "来源是本机地址（" + iface + "）"
+		}
+		if !p.Mesh.Contains(a) {
+			return "来源不在懒猫组网网段内"
+		}
+		if len(p.Net.Routes) > 0 {
+			if iface := p.Net.RouteIface(a); iface != p.MeshIf {
+				return "来源的回程路由不经懒猫组网网卡（" + iface + "）"
+			}
+		}
+		return ""
+	}
+	if local.IsValid() && local != p.ListenIP {
+		return "连接到了未授权的本机地址 " + local.String()
+	}
+	return p.CheckSource(a)
 }
 
 // CheckSource returns "" when the client address may use the proxy.
