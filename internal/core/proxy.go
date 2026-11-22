@@ -932,6 +932,13 @@ func (s *Server) serveSOCKS5(c net.Conn, br *bufio.Reader, t *tracked, src netip
 		if _, err := io.ReadFull(br, pass); err != nil {
 			return
 		}
+		if len(uname) == 0 && len(pass) == 0 && s.noAuthAllowed(t, src) {
+			// Some clients pick username/password even with no account
+			// configured and send it empty: that is "no credentials".
+			c.Write([]byte{0x01, 0x00})
+			s.markAnon(t, &rec, src)
+			break
+		}
 		rec.User = string(uname)
 		if res, reason := s.authenticate(src, string(uname), string(pass)); res != "" {
 			c.Write([]byte{0x01, 0x01})
@@ -1145,7 +1152,7 @@ func (s *Server) serveHTTP(c net.Conn, br *bufio.Reader, t *tracked, src netip.A
 		}
 		name, pass, ok := proxyAuth(req.Header)
 		switch {
-		case !ok && req.Header.Get("Proxy-Authorization") == "" && s.noAuthAllowed(t, src):
+		case (!ok && req.Header.Get("Proxy-Authorization") == "" || ok && name == "" && pass == "") && s.noAuthAllowed(t, src):
 			s.markAnon(t, &r, src)
 		case !ok:
 			httpError(c, http.StatusProxyAuthRequired, authChallenge)

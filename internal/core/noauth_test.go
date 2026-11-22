@@ -308,3 +308,42 @@ func TestNoAuthWrongPasswordNotDowngraded(t *testing.T) {
 		t.Fatal("dialed upstream for a failed login")
 	}
 }
+
+// An empty username and password means "no credentials": allowed in no-auth
+// mode without touching the rate limiter; refused when authentication is required.
+func TestEmptyCredentialsAreNoAuth(t *testing.T) {
+	h := newHarness(t, "127.0.0.0/8", func(s *Server) { s.Limits.AuthFailMax = 2 })
+	c, a, _ := h.socks("", "", "public.test", 7)
+	c.Close()
+	if a != 1 {
+		t.Fatalf("empty credentials accepted while authentication is required: %d", a)
+	}
+	h.setNoAuth(true)
+	for i := 0; i < 5; i++ {
+		c, a, rep := h.socks("", "", "public.test", 7)
+		if a != 0 || rep != 0 {
+			t.Fatalf("socks empty credentials #%d: %d %x", i, a, rep)
+		}
+		c.Close()
+		c, _, code := h.connect(basic("", ""), "public.test:443")
+		c.Close()
+		if code != 200 {
+			t.Fatalf("http empty credentials #%d: %d", i, code)
+		}
+	}
+	if r := h.lastLog("ok"); !r.NoAuth || r.User != "" {
+		t.Fatalf("log %+v", r)
+	}
+	// A real account still works afterwards (not blocked by the empty attempts).
+	c, a, rep := h.socks("alice", "alice-password", "public.test", 7)
+	c.Close()
+	if a != 0 || rep != 0 {
+		t.Fatalf("alice after empty attempts: %d %x", a, rep)
+	}
+	// Empty username with a password is still a (failed) login.
+	c, a, _ = h.socks("", "something", "public.test", 7)
+	c.Close()
+	if a != 1 {
+		t.Fatalf("empty user with password accepted: %d", a)
+	}
+}
