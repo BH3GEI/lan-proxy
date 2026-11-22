@@ -96,6 +96,7 @@ func newHarnessMode(t *testing.T, lan, mode string, tweak func(*Server)) *harnes
 	s := NewServer(h.dir)
 	s.ConfPoll = 20 * time.Millisecond
 	s.Limits.AuthFailDelay = 0
+	s.ARP = func() (map[string]string, error) { return map[string]string{"127.0.0.1": "aa:bb:cc:dd:ee:01"}, nil }
 	s.Scan = func() (*NetView, error) { return view, nil }
 	s.MakePolicy = func(c Config, v *NetView) (*Policy, error) {
 		p, err := BuildPolicy(DefaultConfig(), v)
@@ -159,6 +160,7 @@ func newHarnessMode(t *testing.T, lan, mode string, tweak func(*Server)) *harnes
 	cfg := DefaultConfig()
 	cfg.Port = port
 	cfg.EgressMode = h.mode
+	cfg.RequireAuth = true // most tests exercise authentication; no-auth tests switch it off
 	h.addUser(&cfg, "alice", "alice-password", true)
 	h.addUser(&cfg, "bob", "bob-password", false)
 	h.writeConfig(cfg)

@@ -218,7 +218,9 @@ func (a *Admin) coreUpdate(w http.ResponseWriter, r *http.Request) {
 // routesBySrc maps the core-side source address to the routing decision.
 func (a *Admin) routesBySrc() map[string]engine.Route {
 	m := map[string]engine.Route{}
-	for _, p := range []string{a.Paths.RouteLog() + ".1", a.Paths.RouteLog()} {
+	files := core.LogFilesNewestFirst(a.Paths.RouteLog(), engine.RouteFiles)
+	for i := len(files) - 1; i >= 0; i-- {
+		p := files[i]
 		f, err := os.Open(p)
 		if err != nil {
 			continue

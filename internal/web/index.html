@@ -72,6 +72,7 @@ pre{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid
 
 <section class="s5">
   <h2>设置</h2>
+  <div class="row"><label>局域网免密码</label><label style="min-width:0"><input type="checkbox" id="s-noauth"> 局域网内的设备不填账号密码也能用</label><span class="hint" id="s-noauth-h"></span></div>
   <div class="row"><label>端口</label><input id="s-port" type="number" min="1024" max="65535" style="width:100px"></div>
   <div class="row"><label>监听地址</label><input id="s-listen" placeholder="自动（默认路由网卡的 IPv4）" size="24"></div>
   <div class="row"><label>局域网网段</label><input id="s-lan" placeholder="自动（该网卡的子网）" size="24"></div>
@@ -128,8 +129,10 @@ pre{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid
   <div class="row tabs" id="logtabs">
     <button data-r="" class="cur">全部</button><button data-r="ok">成功</button><button data-r="denied">被拒或失败</button>
     <select id="l-user"><option value="">所有账号</option></select>
+    <input id="l-src" placeholder="来源 IP 或 MAC" size="16" autocomplete="off">
+    <input id="l-target" placeholder="目标域名或 IP" size="18" autocomplete="off">
     <label style="min-width:0"><input type="checkbox" id="l-auto" checked> 自动刷新</label>
-    <span class="hint">只记录连接元数据（时间、来源、账号、目标、结果、字节数），不记录内容。</span>
+    <span class="hint">只记录连接元数据（时间、来源、账号、目标、出口、结果、字节数），不记录内容。60 秒内重复的同一连接合并为一条并计数。<span id="l-disk"></span></span>
   </div>
   <div class="logwrap"><table><thead><tr><th>时间</th><th>来源</th><th>账号</th><th>协议</th><th>目标</th><th>IP</th><th>出口</th><th>结果</th><th>上行/下行</th><th>时长</th></tr></thead><tbody id="logs"></tbody></table></div>
 </section>
@@ -175,17 +178,32 @@ async function refresh(){
     const e=$("t-error");if(st.error){e.style.display="block";e.textContent=st.error}else e.style.display="none";
   }
   if(document.activeElement.tagName!=="INPUT"&&document.activeElement.tagName!=="TEXTAREA"){
+    $("s-noauth").checked=set.lan_no_auth;
     $("s-port").value=set.port;$("s-listen").value=set.listen_ip;$("s-lan").value=set.lan_cidrs.join(" ");$("s-deny").value=set.extra_deny.join("\n");
   }
-  $("users").innerHTML=S.users.map(u=>`<tr><td class="mono">${esc(u.name)}</td><td>${u.enabled?'<span class="r-ok">启用</span>':'<span class="r-bad">停用</span>'}</td><td>${esc(u.note)}</td><td class="mono">${esc((u.created||"").slice(0,16).replace("T"," "))}</td><td style="white-space:nowrap"><button data-act="toggle" data-u="${esc(u.name)}" data-en="${u.enabled?0:1}">${u.enabled?"停用":"启用"}</button> <button data-act="pw" data-u="${esc(u.name)}">重设密码</button> <button class="danger" data-act="del" data-u="${esc(u.name)}">删除</button></td></tr>`).join("")||'<tr><td colspan="5" class="hint">还没有账号，代理会拒绝所有连接。先添加一个账号。</td></tr>';
-  const sel=$("l-user"),cur=sel.value;sel.innerHTML='<option value="">所有账号</option>'+S.users.map(u=>`<option${u.name===cur?" selected":""}>${esc(u.name)}</option>`).join("");
+  $("users").innerHTML=S.users.map(u=>`<tr><td class="mono">${esc(u.name)}</td><td>${u.enabled?'<span class="r-ok">启用</span>':'<span class="r-bad">停用</span>'}</td><td>${esc(u.note)}</td><td class="mono">${esc((u.created||"").slice(0,16).replace("T"," "))}</td><td style="white-space:nowrap"><button data-act="toggle" data-u="${esc(u.name)}" data-en="${u.enabled?0:1}">${u.enabled?"停用":"启用"}</button> <button data-act="pw" data-u="${esc(u.name)}">重设密码</button> <button class="danger" data-act="del" data-u="${esc(u.name)}">删除</button></td></tr>`).join("")||'<tr><td colspan="5" class="hint">还没有账号。'+(set.lan_no_auth?"局域网免密码已打开，不填账号也能用。":"代理会拒绝所有连接，先添加一个账号。")+'</td></tr>';
+  $("s-noauth-h").textContent=set.lan_no_auth?"已打开：带账号密码的客户端照常可用，错误密码仍会被拒":"已关闭：所有连接都要账号密码";
+  if(S.disk){const d=S.disk;$("l-disk").textContent=`日志占用 ${fmtB(d.conn)} / 上限 ${fmtB(d.conn_cap)}；分流记录 ${fmtB(d.route)} / ${fmtB(d.route_cap)}；内核数据（规则库、节点列表）${fmtB(d.core)}`}
+  const sel=$("l-user"),cur=sel.value;sel.innerHTML='<option value="">所有账号</option><option value="-"'+(cur==="-"?" selected":"")+'>免密码</option>'+S.users.map(u=>`<option${u.name===cur?" selected":""}>${esc(u.name)}</option>`).join("");
   renderHowto(st);
 }
 function renderHowto(st){
   if(!st||!st.listen){$("howto").innerHTML='<span class="hint">代理启动后显示。</span>';return}
   const [ip,port]=[st.listen.replace(/:\d+$/,""),st.listen.match(/:(\d+)$/)[1]];
-  const u=S.users.find(x=>x.enabled)?.name||"用户名";
-  $("howto").innerHTML=`<p class="hint">同一端口同时接受 HTTP（含 CONNECT）和 SOCKS5，只接受局域网 ${esc((st.lan_cidrs||[]).join(" "))} 内的设备。下面的「密码」替换为该账号的密码。</p>
+  const u=S.users.find(x=>x.enabled)?.name||"用户名",na=S.settings.lan_no_auth;
+  const lan=esc((st.lan_cidrs||[]).join(" "));
+  $("howto").innerHTML=na?`<p class="hint">局域网免密码已打开：只填地址和端口即可，账号密码可不填（填了也照常可用）。同一端口同时接受 HTTP（含 CONNECT）和 SOCKS5，只接受局域网 ${lan} 内的设备。</p>
+<pre>服务器 ${esc(ip)}    端口 ${esc(port)}    类型 HTTP 或 SOCKS5
+
+# 手机 / 电脑系统代理（iPhone、Android、macOS、Windows、电视盒子）
+#   代理选「手动」，服务器 ${esc(ip)}，端口 ${esc(port)}，鉴定/认证关闭
+# 命令行（macOS / Linux）
+export http_proxy=http://${esc(ip)}:${esc(port)} https_proxy=http://${esc(ip)}:${esc(port)}
+curl -x http://${esc(ip)}:${esc(port)} https://example.com
+curl --socks5-hostname ${esc(ip)}:${esc(port)} https://example.com
+# 代理 URI（Clash/Surge/sing-box 等）
+http://${esc(ip)}:${esc(port)}
+socks5://${esc(ip)}:${esc(port)}</pre>`:`<p class="hint">同一端口同时接受 HTTP（含 CONNECT）和 SOCKS5，只接受局域网 ${lan} 内的设备。下面的「密码」替换为该账号的密码。</p>
 <pre>地址 ${esc(ip)}    端口 ${esc(port)}    账号 ${esc(u)}
 
 # 命令行（macOS / Linux）
@@ -206,8 +224,8 @@ socks5://${esc(u)}:密码@${esc(ip)}:${esc(port)}
 }
 async function loadLogs(){
   try{
-    const L=await api(`/api/logs?n=300&result=${encodeURIComponent(logFilter)}&user=${encodeURIComponent($("l-user").value)}`);
-    $("logs").innerHTML=L.map(r=>{const [t,c]=RES[r.result]||[r.result,""];return `<tr><td class="mono">${fmtT(r.t)}</td><td class="mono">${esc(r.src)}</td><td class="mono">${esc(r.user)}</td><td>${esc(r.proto)}</td><td class="mono">${esc(r.target)}</td><td class="mono">${esc(r.ip)}</td><td class="mono" title="${esc(r.rule||"")}">${esc(r.outbound||(r.via==="core"?"分流内核":""))}${r.rule?'<div class="hint">'+esc(r.rule)+'</div>':""}</td><td class="${c}" title="${esc(r.reason)}">${esc(t)}${r.reason?'<div class="hint">'+esc(r.reason)+'</div>':""}</td><td class="mono">${r.result==="ok"?fmtB(r.up)+" / "+fmtB(r.down):""}</td><td class="mono">${r.dur_ms!=null&&r.result==="ok"?(r.dur_ms/1000).toFixed(1)+" s":""}</td></tr>`}).join("")||'<tr><td colspan="10" class="hint">暂无记录</td></tr>';
+    const L=await api(`/api/logs?n=300&result=${encodeURIComponent(logFilter)}&user=${encodeURIComponent($("l-user").value)}&src=${encodeURIComponent($("l-src").value.trim())}&target=${encodeURIComponent($("l-target").value.trim())}`);
+    $("logs").innerHTML=L.map(r=>{const [t,c]=RES[r.result]||[r.result,""];return `<tr><td class="mono">${fmtT(r.t)}${r.n?'<div class="hint">另有 '+r.n+' 次</div>':""}</td><td class="mono">${esc(r.src)}${r.mac?'<div class="hint">'+esc(r.mac)+'</div>':""}</td><td class="mono">${r.noauth?'<span class="hint">免密码</span>':esc(r.user)}</td><td>${esc(r.proto)}</td><td class="mono">${esc(r.target)}</td><td class="mono">${esc(r.ip)}</td><td class="mono" title="${esc(r.rule||"")}">${esc(r.outbound||(r.via==="core"?"分流内核":""))}${r.rule?'<div class="hint">'+esc(r.rule)+'</div>':""}</td><td class="${c}" title="${esc(r.reason)}">${esc(t)}${r.reason?'<div class="hint">'+esc(r.reason)+'</div>':""}</td><td class="mono">${r.result==="ok"?fmtB(r.up)+" / "+fmtB(r.down):""}</td><td class="mono">${r.dur_ms!=null&&r.result==="ok"?(r.dur_ms/1000).toFixed(1)+" s":""}</td></tr>`}).join("")||'<tr><td colspan="10" class="hint">暂无记录</td></tr>';
   }catch(e){}
 }
 $("b-toggle").onclick=async()=>{try{await api("/api/settings",{enabled:!S.settings.enabled});flash(S.settings.enabled?"已停止":"已启动");setTimeout(refresh,1500)}catch(e){flash(e.message)}};
@@ -224,6 +242,9 @@ $("b-selftest").onclick=async()=>{$("selftest").innerHTML='<p class="hint">自�
   $("selftest").innerHTML=`<p class="${j.pass?"r-ok":"r-bad"}">${j.pass?"通过":"未通过"}：${esc(j.summary)}</p>`+(j.log?`<pre>${esc(JSON.stringify(j.log))}</pre>`:"")}catch(e){$("selftest").innerHTML=`<p class="r-bad">${esc(e.message)}</p>`}};
 $("logtabs").onclick=ev=>{const b=ev.target.closest("button");if(!b)return;logFilter=b.dataset.r;[...$("logtabs").querySelectorAll("button")].forEach(x=>x.classList.toggle("cur",x===b));loadLogs()};
 $("l-user").onchange=loadLogs;
+let lt;for(const id of ["l-src","l-target"])$(id).oninput=()=>{clearTimeout(lt);lt=setTimeout(loadLogs,300)};
+$("s-noauth").onchange=async ev=>{const on=ev.target.checked;if(!on&&!S.users.some(u=>u.enabled)&&!confirm("还没有启用的账号，关闭后所有设备都连不上。确定关闭？")){ev.target.checked=true;return}
+  try{await api("/api/settings",{lan_no_auth:on});flash(on?"已打开局域网免密码":"已关闭局域网免密码，免密码的连接已断开");setTimeout(refresh,1200)}catch(e){flash(e.message);ev.target.checked=!on}};
 refresh();loadLogs();
 setInterval(refresh,3000);setInterval(()=>{if($("l-auto").checked)loadLogs()},3000);
 let C=null;

@@ -477,22 +477,17 @@ func (e *Engine) readLog(r io.Reader, secret string) {
 	}
 }
 
-const maxRouteBytes = 2 << 20
+// Routing log: at most RouteFiles files of RouteFileBytes each (about 4 MB).
+const (
+	RouteFileBytes = 2 << 20
+	RouteFiles     = 2
+)
 
 func (e *Engine) writeRoute(r Route) {
 	b, _ := json.Marshal(r)
 	e.routeMu.Lock()
 	defer e.routeMu.Unlock()
-	p := e.Paths.RouteLog()
-	if st, err := os.Stat(p); err == nil && st.Size() > maxRouteBytes {
-		os.Rename(p, p+".1")
-	}
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return
-	}
-	f.Write(append(b, '\n'))
-	f.Close()
+	core.AppendRotating(e.Paths.RouteLog(), append(b, '\n'), RouteFileBytes, RouteFiles)
 }
 
 func (e *Engine) writeState() {

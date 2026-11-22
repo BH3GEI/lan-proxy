@@ -55,14 +55,19 @@ func DefaultLimits() Limits {
 }
 
 type Server struct {
-	Paths      Paths
-	Limits     Limits
-	Resolve    func(ctx context.Context, host string) ([]netip.Addr, error)
-	Scan       func() (*NetView, error)
-	Dial       func(ctx context.Context, addr string) (net.Conn, error)
-	CoreDial   func(ctx context.Context, addr string) (net.Conn, error)
-	MakePolicy func(Config, *NetView) (*Policy, error)
-	ConfPoll   time.Duration
+	Paths       Paths
+	Limits      Limits
+	Resolve     func(ctx context.Context, host string) ([]netip.Addr, error)
+	Scan        func() (*NetView, error)
+	Dial        func(ctx context.Context, addr string) (net.Conn, error)
+	CoreDial    func(ctx context.Context, addr string) (net.Conn, error)
+	MakePolicy  func(Config, *NetView) (*Policy, error)
+	ConfPoll    time.Duration
+	ARP         func() (map[string]string, error) // source IP -> MAC; nil = unknown
+	MergeWindow time.Duration
+
+	merge map[string]*mergeEntry // guarded by logMu
+	arp   arpCache
 
 	mu         sync.Mutex
 	cfg        Config
@@ -90,6 +95,7 @@ type Server struct {
 type tracked struct {
 	conn net.Conn
 	user atomic.Value // string
+	anon atomic.Bool  // accepted without credentials
 	up   net.Conn     // upstream, if any
 	mu   sync.Mutex
 }
@@ -115,13 +121,15 @@ func NewServer(dir string) *Server {
 			d := net.Dialer{KeepAlive: 60 * time.Second}
 			return d.DialContext(ctx, "tcp", addr)
 		},
-		MakePolicy: BuildPolicy,
-		ConfPoll:   time.Second,
-		users:      map[string]User{},
-		authCache:  map[[32]byte]string{},
-		conns:      map[uint64]*tracked{},
-		perSrc:     map[netip.Addr]int{},
-		fails:      map[netip.Addr]*failState{},
+		MakePolicy:  BuildPolicy,
+		ConfPoll:    time.Second,
+		ARP:         readProcARP,
+		MergeWindow: DefaultMergeWindow,
+		users:       map[string]User{},
+		authCache:   map[[32]byte]string{},
+		conns:       map[uint64]*tracked{},
+		perSrc:      map[netip.Addr]int{},
+		fails:       map[netip.Addr]*failState{},
 	}
 }
 
@@ -209,6 +217,7 @@ func (s *Server) Run(ctx context.Context) {
 			s.writeStatus(view)
 			lastStatus = time.Now()
 		}
+		s.flushMerge(false)
 		select {
 		case <-ctx.Done():
 			s.mu.Lock()
@@ -216,6 +225,7 @@ func (s *Server) Run(ctx context.Context) {
 				s.ln.Close()
 			}
 			s.mu.Unlock()
+			s.flushMerge(true)
 			return
 		case <-tick.C:
 		}
@@ -308,8 +318,13 @@ func (s *Server) apply(view *NetView) {
 		}
 	}
 	s.authCache = map[[32]byte]string{}
-	// Close connections of accounts that were removed or disabled.
+	// Close connections of accounts that were removed or disabled, and
+	// credential-less connections once authentication becomes mandatory.
 	for _, t := range s.conns {
+		if cfg.RequireAuth && t.anon.Load() {
+			t.close()
+			continue
+		}
 		if u, _ := t.user.Load().(string); u != "" {
 			if _, ok := s.users[u]; !ok {
 				t.close()
@@ -462,6 +477,21 @@ func (s *Server) handle(c net.Conn) {
 }
 
 // ---- authentication -------------------------------------------------------
+
+// noAuthAllowed reports whether src may connect without credentials: the
+// switch is on and the source is inside the LAN (checked again here, on top
+// of the source check every connection already passed).
+func (s *Server) noAuthAllowed(src netip.Addr) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.cfg.RequireAuth && s.pol != nil && s.pol.CheckSource(src) == ""
+}
+
+func (s *Server) markAnon(t *tracked, rec *ConnRecord, src netip.Addr) {
+	t.anon.Store(true)
+	rec.NoAuth = true
+	rec.MAC = s.macOf(src)
+}
 
 var dummyUser = func() User {
 	salt, hash, _ := HashPassword("dummy-password-for-timing")
@@ -830,46 +860,54 @@ func (s *Server) serveSOCKS5(c net.Conn, br *bufio.Reader, t *tracked, src netip
 	if _, err := io.ReadFull(br, methods); err != nil {
 		return
 	}
-	hasUP := false
+	hasUP, hasNone := false, false
 	for _, m := range methods {
-		if m == 0x02 {
+		switch m {
+		case 0x02:
 			hasUP = true
+		case 0x00:
+			hasNone = true
 		}
 	}
-	if !hasUP {
+	switch {
+	case hasUP:
+		c.Write([]byte{0x05, 0x02})
+		// RFC 1929
+		v := make([]byte, 2)
+		if _, err := io.ReadFull(br, v); err != nil || v[0] != 0x01 {
+			return
+		}
+		uname := make([]byte, v[1])
+		if _, err := io.ReadFull(br, uname); err != nil {
+			return
+		}
+		pl := make([]byte, 1)
+		if _, err := io.ReadFull(br, pl); err != nil {
+			return
+		}
+		pass := make([]byte, pl[0])
+		if _, err := io.ReadFull(br, pass); err != nil {
+			return
+		}
+		rec.User = string(uname)
+		if res, reason := s.authenticate(src, string(uname), string(pass)); res != "" {
+			c.Write([]byte{0x01, 0x01})
+			rec.Result, rec.Reason = res, reason
+			s.logRecord(rec)
+			return
+		}
+		c.Write([]byte{0x01, 0x00})
+		t.user.Store(string(uname))
+	case hasNone && s.noAuthAllowed(src):
+		c.Write([]byte{0x05, 0x00})
+		s.markAnon(t, &rec, src)
+	default:
 		c.Write([]byte{0x05, 0xFF})
 		rec.Result, rec.Reason = "auth_failed", "客户端未提供用户名密码认证"
 		s.authFailed.Add(1)
 		s.logRecord(rec)
 		return
 	}
-	c.Write([]byte{0x05, 0x02})
-	// RFC 1929
-	v := make([]byte, 2)
-	if _, err := io.ReadFull(br, v); err != nil || v[0] != 0x01 {
-		return
-	}
-	uname := make([]byte, v[1])
-	if _, err := io.ReadFull(br, uname); err != nil {
-		return
-	}
-	pl := make([]byte, 1)
-	if _, err := io.ReadFull(br, pl); err != nil {
-		return
-	}
-	pass := make([]byte, pl[0])
-	if _, err := io.ReadFull(br, pass); err != nil {
-		return
-	}
-	rec.User = string(uname)
-	if res, reason := s.authenticate(src, string(uname), string(pass)); res != "" {
-		c.Write([]byte{0x01, 0x01})
-		rec.Result, rec.Reason = res, reason
-		s.logRecord(rec)
-		return
-	}
-	c.Write([]byte{0x01, 0x00})
-	t.user.Store(string(uname))
 
 	req := make([]byte, 4)
 	if _, err := io.ReadFull(br, req); err != nil || req[0] != 0x05 {
@@ -1063,25 +1101,29 @@ func (s *Server) serveHTTP(c net.Conn, br *bufio.Reader, t *tracked, src netip.A
 			r.Proto = "http"
 		}
 		name, pass, ok := proxyAuth(req.Header)
-		if !ok {
+		switch {
+		case !ok && req.Header.Get("Proxy-Authorization") == "" && s.noAuthAllowed(src):
+			s.markAnon(t, &r, src)
+		case !ok:
 			httpError(c, http.StatusProxyAuthRequired, authChallenge)
 			return
-		}
-		r.User = name
-		if res, reason := s.authenticate(src, name, pass); res != "" {
-			r.Result, r.Reason = res, reason
-			if r.Proto == "http" && req.URL != nil {
-				r.Target = req.URL.Host
+		default:
+			r.User = name
+			if res, reason := s.authenticate(src, name, pass); res != "" {
+				r.Result, r.Reason = res, reason
+				if r.Proto == "http" && req.URL != nil {
+					r.Target = req.URL.Host
+				}
+				s.logRecord(r)
+				if res == "auth_blocked" {
+					httpError(c, http.StatusForbidden, "")
+				} else {
+					httpError(c, http.StatusProxyAuthRequired, authChallenge)
+				}
+				return
 			}
-			s.logRecord(r)
-			if res == "auth_blocked" {
-				httpError(c, http.StatusForbidden, "")
-			} else {
-				httpError(c, http.StatusProxyAuthRequired, authChallenge)
-			}
-			return
+			t.user.Store(name)
 		}
-		t.user.Store(name)
 		if req.Method == http.MethodConnect {
 			closeUp()
 			host, ps, err := net.SplitHostPort(req.Host)
@@ -1210,23 +1252,67 @@ var errHeaderTooLarge = errors.New("header too large")
 
 // ---- logging and status ---------------------------------------------------
 
-const maxLogBytes = 4 << 20
-
-func (s *Server) logRecord(r ConnRecord) {
+func (s *Server) writeLine(r ConnRecord) {
 	b, _ := json.Marshal(r)
+	if err := AppendRotating(s.Paths.ConnLog(), append(b, '\n'), LogFileBytes, LogFiles); err != nil {
+		log.Printf("conn log: %v", err)
+	}
+}
+
+// logRecord writes the first of a run of identical connections at once and
+// folds repeats within s.MergeWindow into one record with a count (N).
+func (s *Server) logRecord(r ConnRecord) {
 	s.logMu.Lock()
 	defer s.logMu.Unlock()
-	p := s.Paths.ConnLog()
-	if st, err := os.Stat(p); err == nil && st.Size() > maxLogBytes {
-		os.Rename(p, p+".1")
+	if s.merge == nil {
+		s.merge = map[string]*mergeEntry{}
 	}
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		log.Printf("conn log: %v", err)
+	k := mergeKey(r)
+	if e := s.merge[k]; e != nil && time.Since(e.start) < s.MergeWindow {
+		if e.rec.N == 0 {
+			e.rec = r
+		} else {
+			e.rec.Time, e.rec.Src, e.rec.ID, e.rec.CoreSrc, e.rec.IP = r.Time, r.Src, r.ID, r.CoreSrc, r.IP
+			e.rec.Up += r.Up
+			e.rec.Down += r.Down
+			e.rec.DurMS += r.DurMS
+			if r.MAC != "" {
+				e.rec.MAC = r.MAC
+			}
+		}
+		e.rec.N++
 		return
 	}
-	f.Write(append(b, '\n'))
-	f.Close()
+	if len(s.merge) >= mergeMax {
+		s.flushMergeLocked(true)
+	}
+	s.writeLine(r)
+	s.merge[k] = &mergeEntry{start: time.Now()}
+}
+
+// flushMerge writes folded records whose window has ended (all if force).
+func (s *Server) flushMerge(force bool) {
+	s.logMu.Lock()
+	defer s.logMu.Unlock()
+	s.flushMergeLocked(force)
+}
+
+func (s *Server) flushMergeLocked(force bool) {
+	for k, e := range s.merge {
+		if force || time.Since(e.start) >= s.MergeWindow {
+			if e.rec.N > 0 {
+				s.writeLine(e.rec)
+			}
+			delete(s.merge, k)
+		}
+	}
+}
+
+func (s *Server) macOf(ip netip.Addr) string {
+	if s.ARP == nil {
+		return ""
+	}
+	return s.arp.lookupWith(s.ARP, ip)
 }
 
 func (s *Server) writeStatus(view *NetView) {

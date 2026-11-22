@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const Version = "0.2.0"
+const Version = "0.3.1"
 
 // User is one proxy account. Only a salted PBKDF2 hash of the password is stored.
 type User struct {
@@ -39,6 +39,9 @@ type Config struct {
 	LANCIDRs  []string `json:"lan_cidrs"`  // empty = the subnet of that interface
 	ExtraDeny []string `json:"extra_deny"` // destinations always refused, in addition to the built-in list
 	Users     []User   `json:"users"`
+	// RequireAuth=false (the default, Yao's choice): clients from the LAN may
+	// connect without credentials; clients that send credentials are still checked.
+	RequireAuth bool `json:"require_auth"`
 
 	// Egress. "rules": LAN destinations direct, everything else through the
 	// mihomo core (China list direct, the rest via subscription nodes).
@@ -253,6 +256,9 @@ type ConnRecord struct {
 	DurMS   int64     `json:"dur_ms,omitempty"`
 	Via     string    `json:"via,omitempty"`      // direct | core
 	CoreSrc string    `json:"core_src,omitempty"` // local address of the hop to the core, to join with its routing log
+	NoAuth  bool      `json:"noauth,omitempty"`   // accepted without credentials (LAN no-auth mode)
+	MAC     string    `json:"mac,omitempty"`      // source MAC from the NAS's ARP table, when known
+	N       int       `json:"n,omitempty"`        // >0: this record folds N repeats of the previous identical one
 }
 
 // CoreEndpoint is written by the core service: where its SOCKS5 listener is.

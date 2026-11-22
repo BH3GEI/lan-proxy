@@ -8,7 +8,7 @@ import (
 	"lanproxy/internal/core"
 )
 
-const secretURL = "https://sub.example.com/psub/rZm1SecretToken0123?x=1"
+const secretURL = "https://sub.example.com/psub/qX9SecretToken0123?x=1"
 
 func TestBuildConfigWithSub(t *testing.T) {
 	c := core.DefaultConfig()
@@ -32,7 +32,7 @@ func TestBuildConfigWithSub(t *testing.T) {
 			t.Errorf("config missing %q\n%s", want, txt)
 		}
 	}
-	if strings.Contains(txt, "rZm1SecretToken") || strings.Contains(txt, "sub.example.com") {
+	if strings.Contains(txt, "qX9SecretToken") || strings.Contains(txt, "sub.example.com") {
 		t.Error("subscription URL in mihomo config")
 	}
 	for _, bad := range []string{"'0.0.0.0'", "mixed-port", "external-controller: ':", "'*'"} {
@@ -82,9 +82,9 @@ func TestParseRoute(t *testing.T) {
 }
 
 func TestScrub(t *testing.T) {
-	line := `level=error msg="initial proxy provider sub error: Get "` + secretURL + `": dial tcp: timeout; token rZm1SecretToken0123"`
+	line := `level=error msg="initial proxy provider sub error: Get "` + secretURL + `": dial tcp: timeout; token qX9SecretToken0123"`
 	out := Scrub(line, secretURL)
-	if strings.Contains(out, "rZm1SecretToken0123") || strings.Contains(out, "/psub/rZm1") {
+	if strings.Contains(out, "qX9SecretToken0123") || strings.Contains(out, "/psub/qX9") {
 		t.Fatalf("token leaked: %s", out)
 	}
 	if !strings.Contains(out, "sub.example.com") {

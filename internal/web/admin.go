@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"lanproxy/internal/core"
+	"lanproxy/internal/engine"
 )
 
 //go:embed index.html
@@ -138,12 +139,33 @@ func (a *Admin) state(w http.ResponseWriter, r *http.Request) {
 			"lan_cidrs": nz(c.LANCIDRs), "extra_deny": nz(c.ExtraDeny),
 			"egress_mode": c.EgressMode, "sub_set": c.SubURL != "", "sub_host": core.MaskURL(c.SubURL),
 			"sub_interval_hours": c.SubIntervalHours, "test_url": c.TestURL,
+			"lan_no_auth": !c.RequireAuth,
 		},
+		"disk":   a.diskUsage(),
 		"users":  users,
 		"status": st,
 		"stale":  stale,
 		"now":    time.Now(),
 	})
+}
+
+func (a *Admin) diskUsage() map[string]int64 {
+	sum := func(base string, keep int) int64 {
+		var n int64
+		for _, p := range core.LogFilesNewestFirst(base, keep) {
+			if st, err := os.Stat(p); err == nil {
+				n += st.Size()
+			}
+		}
+		return n
+	}
+	return map[string]int64{
+		"conn":      sum(a.Paths.ConnLog(), core.LogFiles),
+		"conn_cap":  core.LogFileBytes * core.LogFiles,
+		"route":     sum(a.Paths.RouteLog(), engine.RouteFiles),
+		"route_cap": engine.RouteFileBytes * engine.RouteFiles,
+		"core":      core.DirBytes(a.Paths.CoreDir()),
+	}
 }
 
 func nz(s []string) []string {
@@ -164,6 +186,7 @@ func (a *Admin) settings(w http.ResponseWriter, r *http.Request) {
 		SubURL    *string   `json:"sub_url"` // write-only; "" clears
 		SubHours  *int      `json:"sub_interval_hours"`
 		TestURL   *string   `json:"test_url"`
+		LANNoAuth *bool     `json:"lan_no_auth"`
 	}
 	if err := decode(r, &in); err != nil {
 		fail(w, 400, "请求格式错误")
@@ -196,6 +219,9 @@ func (a *Admin) settings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.TestURL != nil {
 			c.TestURL = strings.TrimSpace(*in.TestURL)
+		}
+		if in.LANNoAuth != nil {
+			c.RequireAuth = !*in.LANNoAuth
 		}
 		return nil
 	})
@@ -334,38 +360,55 @@ func (a *Admin) deleteUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
-// readLog returns up to n records, newest first, matching the filters.
-func (a *Admin) readLog(n int, user, result string) []core.ConnRecord {
-	var all []core.ConnRecord
-	for _, p := range []string{a.Paths.ConnLog() + ".1", a.Paths.ConnLog()} {
-		f, err := os.Open(p)
+// LogFilter selects connection records; empty fields match everything.
+type LogFilter struct {
+	User, Result, Src, Target string
+}
+
+func (f LogFilter) match(rec core.ConnRecord) bool {
+	if f.User != "" && rec.User != f.User && !(f.User == "-" && rec.NoAuth) {
+		return false
+	}
+	if f.Result == "denied" {
+		if rec.Result == "ok" {
+			return false
+		}
+	} else if f.Result != "" && rec.Result != f.Result {
+		return false
+	}
+	if f.Src != "" && !strings.Contains(rec.Src, f.Src) && !strings.EqualFold(rec.MAC, f.Src) {
+		return false
+	}
+	if f.Target != "" && !strings.Contains(strings.ToLower(rec.Target+" "+rec.IP), strings.ToLower(f.Target)) {
+		return false
+	}
+	return true
+}
+
+// readLog returns up to n records, newest first, reading the newest files first.
+func (a *Admin) readLog(n int, f LogFilter) []core.ConnRecord {
+	out := make([]core.ConnRecord, 0, n)
+	for _, p := range core.LogFilesNewestFirst(a.Paths.ConnLog(), core.LogFiles) {
+		fh, err := os.Open(p)
 		if err != nil {
 			continue
 		}
-		sc := bufio.NewScanner(f)
+		var recs []core.ConnRecord
+		sc := bufio.NewScanner(fh)
 		sc.Buffer(make([]byte, 64<<10), 1<<20)
 		for sc.Scan() {
 			var rec core.ConnRecord
-			if json.Unmarshal(sc.Bytes(), &rec) != nil {
-				continue
+			if json.Unmarshal(sc.Bytes(), &rec) == nil && f.match(rec) {
+				recs = append(recs, rec)
 			}
-			if user != "" && rec.User != user {
-				continue
-			}
-			if result == "denied" {
-				if rec.Result == "ok" {
-					continue
-				}
-			} else if result != "" && rec.Result != result {
-				continue
-			}
-			all = append(all, rec)
 		}
-		f.Close()
-	}
-	out := make([]core.ConnRecord, 0, n)
-	for i := len(all) - 1; i >= 0 && len(out) < n; i-- {
-		out = append(out, all[i])
+		fh.Close()
+		for i := len(recs) - 1; i >= 0 && len(out) < n; i-- {
+			out = append(out, recs[i])
+		}
+		if len(out) >= n {
+			break
+		}
 	}
 	return out
 }
@@ -375,7 +418,9 @@ func (a *Admin) logs(w http.ResponseWriter, r *http.Request) {
 	if n <= 0 || n > 2000 {
 		n = 300
 	}
-	writeJSON(w, 200, a.enrich(a.readLog(n, r.URL.Query().Get("user"), r.URL.Query().Get("result"))))
+	q := r.URL.Query()
+	f := LogFilter{User: q.Get("user"), Result: q.Get("result"), Src: strings.TrimSpace(q.Get("src")), Target: strings.TrimSpace(q.Get("target"))}
+	writeJSON(w, 200, a.enrich(a.readLog(n, f)))
 }
 
 // selftest connects to the proxy from this container (a container-network
@@ -412,7 +457,7 @@ func (a *Admin) selftest(w http.ResponseWriter, r *http.Request) {
 	res["pass"] = true
 	res["summary"] = fmt.Sprintf("代理在握手前关闭了来自 %s 的连接（%v）", local, rerr)
 	time.Sleep(300 * time.Millisecond)
-	for _, rec := range a.readLog(50, "", "src_denied") {
+	for _, rec := range a.readLog(50, LogFilter{Result: "src_denied"}) {
 		if rec.Src == local {
 			res["log"] = rec
 			break
