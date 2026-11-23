@@ -242,6 +242,44 @@ type Policy struct {
 	Mesh     netip.Prefix
 	MeshIf   string
 	MeshNote string // why it is off
+
+	// LazyCat app networks: the IPv4 subnets of the NAS's lzc-br-* bridges.
+	// App containers may connect to the LAN listener, always with credentials.
+	Apps []AppNet
+}
+
+// AppNet is the subnet of one LazyCat app bridge on the NAS.
+type AppNet struct {
+	Prefix netip.Prefix
+	Iface  string
+}
+
+// Source kinds returned by SourceKind.
+const (
+	SrcLAN  = "lan"
+	SrcMesh = "mesh"
+	SrcApp  = "app"
+)
+
+var containerSpace = netip.MustParsePrefix("172.16.0.0/12")
+
+// findApps returns the IPv4 subnets (/16 to /30, inside 172.16.0.0/12) of the
+// LazyCat app bridges (interfaces named lzc-br-*).
+func findApps(v *NetView) []AppNet {
+	var out []AppNet
+	for _, st := range v.Ifaces {
+		if !strings.HasPrefix(st.Name, "lzc-br-") {
+			continue
+		}
+		for _, s := range st.Addrs {
+			pf, err := netip.ParsePrefix(s)
+			if err != nil || !pf.Addr().Is4() || pf.Bits() < 16 || pf.Bits() > 30 || !containerSpace.Contains(pf.Addr()) {
+				continue
+			}
+			out = append(out, AppNet{pf.Masked(), st.Name})
+		}
+	}
+	return out
 }
 
 // fc00::/8 holds the LazyCat network (fc03:1136:…); docker and LazyCat
@@ -341,34 +379,64 @@ func BuildPolicy(cfg Config, v *NetView) (*Policy, error) {
 	} else {
 		p.MeshIP, p.Mesh, p.MeshIf, p.MeshNote = findMesh(v)
 	}
+	if !cfg.NoApps {
+		p.Apps = findApps(v)
+	}
 	return p, nil
 }
 
 // CheckSourceAt checks a client by the address it came from and the local
-// address it connected to. The LAN listener serves only LAN IPv4 sources; the
-// LazyCat-network listener serves only sources inside that network whose
-// return route goes out the LazyCat interface.
+// address it connected to; "" means it may connect.
 func (p *Policy) CheckSourceAt(a, local netip.Addr) string {
+	_, r := p.SourceKind(a, local)
+	return r
+}
+
+// SourceKind classifies a client. The LAN listener serves LAN IPv4 sources
+// and, with credentials only, LazyCat app containers; the LazyCat-network
+// listener serves only sources inside that network whose return route goes
+// out the LazyCat interface. A non-empty reason means refused.
+func (p *Policy) SourceKind(a, local netip.Addr) (string, string) {
 	a, local = a.Unmap(), local.Unmap()
 	if p.MeshIP.IsValid() && local == p.MeshIP {
 		if iface, ok := p.Net.LocalIPs[a]; ok {
-			return "来源是本机地址（" + iface + "）"
+			return "", "来源是本机地址（" + iface + "）"
 		}
 		if !p.Mesh.Contains(a) {
-			return "来源不在懒猫组网网段内"
+			return "", "来源不在懒猫组网网段内"
 		}
 		if len(p.Net.Routes) > 0 {
 			if iface := p.Net.RouteIface(a); iface != p.MeshIf {
-				return "来源的回程路由不经懒猫组网网卡（" + iface + "）"
+				return "", "来源的回程路由不经懒猫组网网卡（" + iface + "）"
 			}
 		}
-		return ""
+		return SrcMesh, ""
 	}
 	if local.IsValid() && local != p.ListenIP {
-		return "连接到了未授权的本机地址 " + local.String()
+		return "", "连接到了未授权的本机地址 " + local.String()
 	}
-	return p.CheckSource(a)
+	r := p.CheckSource(a)
+	if r == "" {
+		return SrcLAN, ""
+	}
+	if r != reasonNotLAN {
+		return "", r
+	}
+	for _, n := range p.Apps {
+		if !a.Is4() || !n.Prefix.Contains(a) {
+			continue
+		}
+		if len(p.Net.Routes) > 0 {
+			if iface := p.Net.RouteIface(a); iface != n.Iface {
+				return "", "来源的回程路由不经懒猫应用网桥（" + iface + "）"
+			}
+		}
+		return SrcApp, ""
+	}
+	return "", r
 }
+
+const reasonNotLAN = "来源不在局域网网段内"
 
 // CheckSource returns "" when the client address may use the proxy.
 func (p *Policy) CheckSource(a netip.Addr) string {
@@ -377,7 +445,7 @@ func (p *Policy) CheckSource(a netip.Addr) string {
 		return "来源是本机地址（" + iface + "）"
 	}
 	if !inAny(a, p.LAN) {
-		return "来源不在局域网网段内"
+		return reasonNotLAN
 	}
 	return ""
 }

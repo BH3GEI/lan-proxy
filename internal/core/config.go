@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const Version = "0.4.1"
+const Version = "0.5.0"
 
 // User is one proxy account. Only a salted PBKDF2 hash of the password is stored.
 type User struct {
@@ -45,6 +45,9 @@ type Config struct {
 	// NoMesh=false (the default): also listen on the NAS's LazyCat network
 	// address and accept clients from that network (same rules as the LAN).
 	NoMesh bool `json:"no_mesh"`
+	// NoApps=false (the default): LazyCat app containers on this NAS (the
+	// lzc-br-* bridges) may use the LAN listener, always with an account.
+	NoApps bool `json:"no_apps"`
 
 	// Egress. "rules": LAN destinations direct, everything else through the
 	// mihomo core (China list direct, the rest via subscription nodes).
@@ -227,6 +230,7 @@ type Status struct {
 	ListenMesh string     `json:"listen_mesh,omitempty"`
 	MeshCIDR   string     `json:"mesh_cidr,omitempty"`
 	MeshNote   string     `json:"mesh_note,omitempty"` // why the LazyCat network listener is off
+	AppCIDRs   []string   `json:"app_cidrs,omitempty"` // LazyCat app networks accepted with credentials
 	LANCIDRs   []string   `json:"lan_cidrs"`
 	DefaultIf  string     `json:"default_if"`
 	Interfaces []IfStatus `json:"interfaces"`
@@ -263,6 +267,7 @@ type ConnRecord struct {
 	Via     string    `json:"via,omitempty"`      // direct | core
 	CoreSrc string    `json:"core_src,omitempty"` // local address of the hop to the core, to join with its routing log
 	NoAuth  bool      `json:"noauth,omitempty"`   // accepted without credentials (LAN no-auth mode)
+	Kind    string    `json:"kind,omitempty"`     // "app" for a LazyCat app container
 	MAC     string    `json:"mac,omitempty"`      // source MAC from the NAS's ARP table, when known
 	N       int       `json:"n,omitempty"`        // >0: this record folds N repeats of the previous identical one
 }

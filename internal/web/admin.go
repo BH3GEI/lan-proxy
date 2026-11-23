@@ -139,7 +139,7 @@ func (a *Admin) state(w http.ResponseWriter, r *http.Request) {
 			"lan_cidrs": nz(c.LANCIDRs), "extra_deny": nz(c.ExtraDeny),
 			"egress_mode": c.EgressMode, "sub_set": c.SubURL != "", "sub_host": core.MaskURL(c.SubURL),
 			"sub_interval_hours": c.SubIntervalHours, "test_url": c.TestURL,
-			"lan_no_auth": !c.RequireAuth, "mesh": !c.NoMesh,
+			"lan_no_auth": !c.RequireAuth, "mesh": !c.NoMesh, "apps": !c.NoApps,
 		},
 		"disk":   a.diskUsage(),
 		"users":  users,
@@ -188,6 +188,7 @@ func (a *Admin) settings(w http.ResponseWriter, r *http.Request) {
 		TestURL   *string   `json:"test_url"`
 		LANNoAuth *bool     `json:"lan_no_auth"`
 		Mesh      *bool     `json:"mesh"`
+		Apps      *bool     `json:"apps"`
 	}
 	if err := decode(r, &in); err != nil {
 		fail(w, 400, "请求格式错误")
@@ -226,6 +227,9 @@ func (a *Admin) settings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.Mesh != nil {
 			c.NoMesh = !*in.Mesh
+		}
+		if in.Apps != nil {
+			c.NoApps = !*in.Apps
 		}
 		return nil
 	})

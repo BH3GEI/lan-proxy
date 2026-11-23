@@ -464,12 +464,16 @@ func (s *Server) handle(c net.Conn) {
 		c.Close()
 		return
 	}
-	if r := pol.CheckSourceAt(src, addrOf(c.LocalAddr())); r != "" {
+	kind, r := pol.SourceKind(src, addrOf(c.LocalAddr()))
+	if r != "" {
 		c.Close()
 		rec.Result, rec.Reason = "src_denied", r
 		s.denied.Add(1)
 		s.logRecord(rec)
 		return
+	}
+	if kind == SrcApp {
+		rec.Kind = SrcApp
 	}
 	s.mu.Lock()
 	if len(s.conns) >= s.Limits.MaxConns || s.perSrc[src] >= s.Limits.MaxPerSource {
@@ -522,12 +526,17 @@ func (s *Server) handle(c net.Conn) {
 // ---- authentication -------------------------------------------------------
 
 // noAuthAllowed reports whether src may connect without credentials: the
-// switch is on and the source is inside the LAN (checked again here, on top
-// of the source check every connection already passed).
+// switch is on and the source is a LAN or LazyCat-network device (checked
+// again here, on top of the source check every connection already passed).
+// LazyCat app containers always need an account.
 func (s *Server) noAuthAllowed(t *tracked, src netip.Addr) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return !s.cfg.RequireAuth && s.pol != nil && s.pol.CheckSourceAt(src, addrOf(t.conn.LocalAddr())) == ""
+	if s.cfg.RequireAuth || s.pol == nil {
+		return false
+	}
+	kind, r := s.pol.SourceKind(src, addrOf(t.conn.LocalAddr()))
+	return r == "" && (kind == SrcLAN || kind == SrcMesh)
 }
 
 func (s *Server) markAnon(t *tracked, rec *ConnRecord, src netip.Addr) {
@@ -1387,6 +1396,9 @@ func (s *Server) writeStatus(view *NetView) {
 			st.MeshCIDR = s.pol.Mesh.String()
 		}
 		st.MeshNote = s.pol.MeshNote
+		for _, n := range s.pol.Apps {
+			st.AppCIDRs = append(st.AppCIDRs, n.Prefix.String())
+		}
 	}
 	seen := map[string]bool{}
 	for _, t := range s.conns {
