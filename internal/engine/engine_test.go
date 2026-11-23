@@ -26,6 +26,7 @@ func TestBuildConfigWithSub(t *testing.T) {
 		"- {name: 节点选择, type: select, proxies: [自动选择], use: [sub]}",
 		"type: url-test",
 		"- RULE-SET,cn_site,DIRECT",
+		"- RULE-SET,cn_ip,DIRECT,no-resolve",
 		"- MATCH,节点选择",
 	} {
 		if !strings.Contains(txt, want) {
@@ -51,6 +52,10 @@ func TestBuildConfigWithSub(t *testing.T) {
 	}
 	if iReject < 0 || iReject > iDirect {
 		t.Fatal("reject rules not first")
+	}
+	// A domain must never be routed by its (possibly polluted) resolved address.
+	if strings.Contains(txt, "- RULE-SET,cn_ip,DIRECT\n") {
+		t.Error("cn_ip matches resolved domains")
 	}
 }
 

@@ -211,7 +211,11 @@ func BuildConfig(c core.Config, listen netip.AddrPort, allowFrom []netip.Prefix,
 		w("  - IP-CIDR6,%s,REJECT", cidr)
 	}
 	w("  - RULE-SET,cn_site,DIRECT")
-	w("  - RULE-SET,cn_ip,DIRECT")
+	// no-resolve: a domain goes direct only when it is on the China domain list.
+	// Domestic DoH sometimes answers blocked names (api.telegram.org) with a
+	// polluted China IP; matching cn_ip on that answer sent them direct, where
+	// they are blocked. China IPs given as literal addresses still go direct.
+	w("  - RULE-SET,cn_ip,DIRECT,no-resolve")
 	w("  - MATCH,%s", GroupSelect)
 	return b.String()
 }

@@ -1,5 +1,5 @@
 package: bh3gei.lzcapp.lanproxy
-version: 0.5.0
+version: 0.5.1
 name: 局域网代理
 description: "服务局域网、懒猫组网设备和本机懒猫应用的 HTTP/SOCKS5 代理。中国网址直连，其余走订阅节点；可免密码或账号密码认证（应用须账号密码），拒绝其他容器网络和公网来源，禁止经代理访问 NAS 本机和内网，网页管理。"
 author: BH3GEI
