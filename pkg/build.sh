@@ -13,5 +13,6 @@ echo "386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6  $MH" | s
 gunzip -c "$MH" > pkg/content/mihomo && chmod 755 pkg/content/mihomo
 mkdir -p pkg/content/rules
 cp vendor/geosite_cn.mrs vendor/geoip_cn.mrs pkg/content/rules/
+cp pkg/supervise.sh pkg/content/supervise.sh
 mkdir -p pkg/dist
 cd pkg && lzc-cli project build -f lzc-build.yml

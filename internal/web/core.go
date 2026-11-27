@@ -1,7 +1,6 @@
 package web
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -215,24 +214,27 @@ func (a *Admin) coreUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
-// routesBySrc maps the core-side source address to the routing decision.
-func (a *Admin) routesBySrc() map[string]engine.Route {
+// routesBySrc maps the core-side source addresses in want to their latest
+// routing decision, reading the route log newest first and stopping once all
+// are found.
+func (a *Admin) routesBySrc(want map[string]bool) map[string]engine.Route {
 	m := map[string]engine.Route{}
-	files := core.LogFilesNewestFirst(a.Paths.RouteLog(), engine.RouteFiles)
-	for i := len(files) - 1; i >= 0; i-- {
-		p := files[i]
-		f, err := os.Open(p)
-		if err != nil {
-			continue
-		}
-		sc := bufio.NewScanner(f)
-		for sc.Scan() {
+	if len(want) == 0 {
+		return m
+	}
+	for _, p := range core.LogFilesNewestFirst(a.Paths.RouteLog(), engine.RouteFiles) {
+		core.ScanLinesReverse(p, func(line []byte) bool {
 			var r engine.Route
-			if json.Unmarshal(sc.Bytes(), &r) == nil {
-				m[r.Src] = r
+			if json.Unmarshal(line, &r) == nil && want[r.Src] {
+				if _, seen := m[r.Src]; !seen {
+					m[r.Src] = r
+				}
 			}
+			return len(m) < len(want)
+		})
+		if len(m) >= len(want) {
+			break
 		}
-		f.Close()
 	}
 	return m
 }
@@ -244,7 +246,13 @@ type logView struct {
 }
 
 func (a *Admin) enrich(recs []core.ConnRecord) []logView {
-	routes := a.routesBySrc()
+	want := map[string]bool{}
+	for _, r := range recs {
+		if r.Via != "direct" && r.CoreSrc != "" {
+			want[r.CoreSrc] = true
+		}
+	}
+	routes := a.routesBySrc(want)
 	out := make([]logView, 0, len(recs))
 	for _, r := range recs {
 		v := logView{ConnRecord: r}

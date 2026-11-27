@@ -8,28 +8,31 @@ services:
   admin:
     image: registry.lazycat.cloud/lzc/lzcapp:3.20.3-2
     # Starts as root only to create /lzcapp/var/data owned by uid 1000, then drops to uid/gid 1000.
-    command: /lzcapp/pkg/content/lanproxy admin -dir /lzcapp/var/data -addr :8080 -uid 1000
+    command: /lzcapp/pkg/content/supervise.sh /lzcapp/pkg/content/lanproxy admin -dir /lzcapp/var/data -addr :8080 -uid 1000
     mem_limit: 128M
     cpus: 0.5
     environment:
       - TZ=America/Los_Angeles
+      - GOMEMLIMIT=80MiB
   # Split-routing core (mihomo): ordinary app network; its SOCKS5 listener is on the
   # container address with random credentials, its API only on a unix socket.
   core:
     image: registry.lazycat.cloud/lzc/lzcapp:3.20.3-2
     user: "1000:1000"
-    command: /lzcapp/pkg/content/lanproxy core -dir /lzcapp/var/data -mihomo /lzcapp/pkg/content/mihomo -assets /lzcapp/pkg/content/rules
+    command: /lzcapp/pkg/content/supervise.sh /lzcapp/pkg/content/lanproxy core -dir /lzcapp/var/data -mihomo /lzcapp/pkg/content/mihomo -assets /lzcapp/pkg/content/rules
     mem_limit: 384M
     cpus: 1
     environment:
       - TZ=America/Los_Angeles
+      - GOMEMLIMIT=280MiB
   # The proxy: host network so it sees real client addresses; binds only the LAN IPv4 address.
   proxy:
     image: registry.lazycat.cloud/lzc/lzcapp:3.20.3-2
     network_mode: host
     user: "1000:1000"
-    command: /lzcapp/pkg/content/lanproxy proxy -dir /lzcapp/var/data
+    command: /lzcapp/pkg/content/supervise.sh /lzcapp/pkg/content/lanproxy proxy -dir /lzcapp/var/data
     mem_limit: 256M
     cpus: 1
     environment:
       - TZ=America/Los_Angeles
+      - GOMEMLIMIT=200MiB

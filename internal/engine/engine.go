@@ -384,7 +384,7 @@ func (e *Engine) start(c core.Config, exited chan struct{}) error {
 		return err
 	}
 	cmd := exec.Command(e.Binary, "-d", e.Paths.CoreDir(), "-f", cfgPath)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = childAttr()
 	pr, pw := io.Pipe()
 	cmd.Stdout, cmd.Stderr = pw, pw
 	if err := cmd.Start(); err != nil {

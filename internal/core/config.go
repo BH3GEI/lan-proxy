@@ -19,7 +19,7 @@ import (
 	"time"
 )
 
-const Version = "0.5.1"
+const Version = "0.5.2"
 
 // User is one proxy account. Only a salted PBKDF2 hash of the password is stored.
 type User struct {

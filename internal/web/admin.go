@@ -3,7 +3,6 @@
 package web
 
 import (
-	"bufio"
 	"crypto/rand"
 	_ "embed"
 	"encoding/json"
@@ -30,6 +29,7 @@ type Admin struct {
 	Paths       core.Paths
 	RequireRole bool // require LazyCat's X-HC-User-Role: ADMIN header
 	mu          sync.Mutex
+	logMu       sync.Mutex
 }
 
 func (a *Admin) Handler() http.Handler {
@@ -397,23 +397,13 @@ func (f LogFilter) match(rec core.ConnRecord) bool {
 func (a *Admin) readLog(n int, f LogFilter) []core.ConnRecord {
 	out := make([]core.ConnRecord, 0, n)
 	for _, p := range core.LogFilesNewestFirst(a.Paths.ConnLog(), core.LogFiles) {
-		fh, err := os.Open(p)
-		if err != nil {
-			continue
-		}
-		var recs []core.ConnRecord
-		sc := bufio.NewScanner(fh)
-		sc.Buffer(make([]byte, 64<<10), 1<<20)
-		for sc.Scan() {
+		core.ScanLinesReverse(p, func(line []byte) bool {
 			var rec core.ConnRecord
-			if json.Unmarshal(sc.Bytes(), &rec) == nil && f.match(rec) {
-				recs = append(recs, rec)
+			if json.Unmarshal(line, &rec) == nil && f.match(rec) {
+				out = append(out, rec)
 			}
-		}
-		fh.Close()
-		for i := len(recs) - 1; i >= 0 && len(out) < n; i-- {
-			out = append(out, recs[i])
-		}
+			return len(out) < n
+		})
 		if len(out) >= n {
 			break
 		}
@@ -428,6 +418,9 @@ func (a *Admin) logs(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	f := LogFilter{User: q.Get("user"), Result: q.Get("result"), Src: strings.TrimSpace(q.Get("src")), Target: strings.TrimSpace(q.Get("target"))}
+	// One log scan at a time: several open pages poll every few seconds.
+	a.logMu.Lock()
+	defer a.logMu.Unlock()
 	writeJSON(w, 200, a.enrich(a.readLog(n, f)))
 }
 
